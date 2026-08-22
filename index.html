@@ -745,7 +745,7 @@ async function syncFromPhone() {
 
 function copySyncCmd() {
   const dir = decodeURIComponent(window.location.href.replace('/index.html','').replace('file:///',''));
-  const cmd = `cd /d "${dir}" & python sync_server.py`;
+  const cmd = `cmd /c "cd /d ${dir} && python sync_server.py"`;
   const ta = document.createElement('textarea');
   ta.value = cmd; ta.style.position = 'fixed'; ta.style.opacity = '0';
   document.body.appendChild(ta); ta.select();
@@ -756,7 +756,7 @@ function copySyncCmd() {
 function showSyncHelp() {
   document.getElementById('dbStatus').textContent = '未加载'; document.getElementById('dbStatus').className = 'db-chip';
   const dir = decodeURIComponent(window.location.href.replace('/index.html','').replace('file:///',''));
-  const cmd = `cd /d "${dir}" & python sync_server.py`;
+  const cmd = `cmd /c "cd /d ${dir} && python sync_server.py"`;
   document.getElementById('modalBody').innerHTML = `
     <div style="text-align:center;padding:16px">
       <div style="font-size:48px;margin-bottom:12px">📱</div>
