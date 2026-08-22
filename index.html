@@ -545,10 +545,15 @@ body {
   font-family: var(--font-ja); background: var(--md-sys-color-surface-container);
   padding: 2px 6px; border-radius: var(--md-sys-shape-corner-xs); font-size: .9em;
 }
-.modal-body .md-content lang {
+.modal-body .md-content lang, .lang-block {
   display: block; font-family: var(--font-ja); font-size: 1.05em;
   padding: 8px 12px; margin: 8px 0; background: var(--md-sys-color-surface-container);
   border-radius: var(--md-sys-shape-corner-s); border-left: 3px solid var(--md-sys-color-primary);
+}
+.lang-block[data-lang]::before {
+  content: attr(data-lang); display: block;
+  font: var(--md-sys-typescale-label-small); color: var(--md-sys-color-primary);
+  margin-bottom: 6px; text-transform: uppercase;
 }
 .modal-body .md-content ul, .modal-body .md-content ol { padding-left: 20px; margin: 8px 0; }
 .modal-body .md-content li { margin: 4px 0; }
@@ -590,7 +595,7 @@ body {
    Pitch Popup
    ============================================================ */
 .pitch-popup {
-  position: absolute; z-index: 60;
+  position: absolute; z-index: 200;
   background: var(--md-sys-color-surface-container-high);
   border-radius: var(--md-sys-shape-corner-m); padding: 12px 16px;
   box-shadow: var(--md-sys-elevation-3); font: var(--md-sys-typescale-body-medium);
@@ -1448,8 +1453,15 @@ function toggleSentence(senId, checked) {
 
 function toggleSelectAll() {
   const convs = currentCollection ? allConvs(currentCollection) : [];
-  if (selectedConvs.size === convs.length) { selectedConvs.clear(); }
-  else { convs.forEach(c => selectedConvs.add(c.messageId)); }
+  if (selectedConvs.size === convs.length) {
+    selectedConvs.clear();
+    selectedSentences.clear();
+  } else {
+    convs.forEach(c => {
+      selectedConvs.add(c.messageId);
+      c.sentences.filter(s => s.type !== 'section').forEach(s => selectedSentences.add(s.id));
+    });
+  }
   if (isCrossSearch) crossSearch(document.getElementById('searchInput').value.toLowerCase().trim());
   else applyFilters();
   updateToolbar();
@@ -1836,11 +1848,13 @@ function lookupEnglish(sentence) {
 }
 
 // 文字划选快捷查询
+let popupJustClosed = false;
 document.addEventListener('mouseup', function(e) {
+  if (popupJustClosed) { popupJustClosed = false; return; }
   const sel = window.getSelection();
   const text = sel.toString().trim();
   if (!text || text.length > 30) return;
-  const senRow = e.target.closest('.sentence-row');
+  const senRow = e.target.closest('.sentence-row') || e.target.closest('#modalBody');
   if (!senRow) return;
 
   document.querySelectorAll('.pitch-popup').forEach(el => el.remove());
@@ -1862,14 +1876,23 @@ document.addEventListener('mouseup', function(e) {
       <a href="https://dictionary.cambridge.org/dictionary/english/${enc}" target="_blank" rel="noopener">🔤 Cambridge</a>
       <a href="https://youglish.com/pronounce/${enc}/english" target="_blank" rel="noopener">🔊 YouGlish</a>`;
   }
+  // 检查是否在弹窗内
+  const inModal = !!e.target.closest('#modalBody');
+  if (inModal) {
+    popup.style.position = 'fixed';
+  }
   popup.style.top = Math.min(e.clientY + 8, window.innerHeight - 180) + 'px';
   popup.style.left = Math.min(e.clientX, window.innerWidth - 220) + 'px';
   document.body.appendChild(popup);
-  setTimeout(() => {
-    document.addEventListener('click', function close(ev) {
-      if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener('click', close); }
-    });
-  }, 0);
+  // 点击外部关闭
+  const closeOnClick = (ev) => {
+    if (!popup.contains(ev.target)) {
+      popup.remove();
+      popupJustClosed = true;
+      document.removeEventListener('mousedown', closeOnClick);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeOnClick), 0);
 });
 
 // ============================================================
