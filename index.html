@@ -743,16 +743,27 @@ async function syncFromPhone() {
   }
 }
 
+function copySyncCmd() {
+  const dir = decodeURIComponent(window.location.href.replace('/index.html','').replace('file:///',''));
+  const cmd = `cd /d "${dir}" & python sync_server.py`;
+  const ta = document.createElement('textarea');
+  ta.value = cmd; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); snackbar('已复制命令'); } catch(e) { snackbar('复制失败，请手动复制'); }
+  document.body.removeChild(ta);
+}
+
 function showSyncHelp() {
   document.getElementById('dbStatus').textContent = '未加载'; document.getElementById('dbStatus').className = 'db-chip';
-  const cmd = `cd /d "${window.location.href.replace('/index.html','').replace('file:///','').replace(/\//g,'\\\\')}" && python sync_server.py`;
+  const dir = decodeURIComponent(window.location.href.replace('/index.html','').replace('file:///',''));
+  const cmd = `cd /d "${dir}" & python sync_server.py`;
   document.getElementById('modalBody').innerHTML = `
     <div style="text-align:center;padding:16px">
       <div style="font-size:48px;margin-bottom:12px">📱</div>
       <div style="font:var(--md-sys-typescale-title-medium);margin-bottom:8px">同步服务未启动</div>
       <div style="font:var(--md-sys-typescale-body-medium);color:var(--md-sys-color-on-surface-variant);margin-bottom:12px">请在新终端运行以下命令：</div>
       <div style="background:var(--md-sys-color-surface-container);padding:10px 14px;border-radius:8px;font-family:Consolas,monospace;font-size:13px;margin-bottom:12px;text-align:left;user-select:all">${cmd}</div>
-      <button class="md-btn md-btn-filled" onclick="navigator.clipboard.writeText('${cmd}');closeModal();snackbar('已复制命令')">📋 复制</button>
+      <button class="md-btn md-btn-filled" onclick="copySyncCmd();closeModal()">📋 复制</button>
       <button class="md-btn md-btn-text" onclick="closeModal()" style="margin-left:8px">关闭</button>
     </div>`;
   document.getElementById('modalOverlay').style.display = 'flex';
