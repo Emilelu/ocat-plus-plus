@@ -339,6 +339,15 @@ body {
 /* Scrollable list */
 .scroll-list { flex: 1; overflow-y: auto; padding: 8px 16px; }
 
+/* Playback Bar */
+.playback-bar {
+  background: var(--md-sys-color-surface-container-high);
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+  padding: 6px 16px; display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
+.playback-bar .pb-mode.active { color: var(--md-sys-color-primary); }
+
 /* ============================================================
    Conversation Card
    ============================================================ */
@@ -431,6 +440,7 @@ body {
   transition: background var(--md-sys-motion-duration-short);
 }
 .sentence-row:hover { background: var(--md-sys-state-hover); }
+.sentence-row.playing { background: var(--md-sys-color-primary-container); border-left: 3px solid var(--md-sys-color-primary); }
 .sentence-row + .sentence-row { border-top: 1px solid var(--md-sys-color-outline-variant); }
 
 .sentence-row .sen-content { flex: 1; }
@@ -610,7 +620,7 @@ body {
 <body>
 
 <div class="top-bar">
-  <h1 style="display:flex;align-items:center;gap:8px">
+  <h1 style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="document.querySelector('.nav-rail').scrollTop=0" title="点击回到顶部">
     <img src="https://writer.drakeet.com/images/orca_dark.png" width="28" height="28" style="border-radius:4px" alt="OCAT">
     OCAT++
   </h1>
@@ -675,6 +685,23 @@ body {
           <div class="title">欢迎使用 OCAT++</div>
           <div class="desc">点击上方「选择数据库」加载 SQLite DB 文件</div>
         </div>
+      </div>
+
+      <!-- Playback Bar -->
+      <div id="pbBar" class="playback-bar">
+        <span style="font:var(--md-sys-typescale-label-small);margin-right:4px">倍速</span>
+        <input type="range" id="speedSlider" min="0.5" max="2.0" step="0.05" value="1.25"
+          oninput="speechRate=parseFloat(this.value);document.getElementById('speedLabel').textContent=speechRate.toFixed(2)+'x'"
+          style="width:80px;accent-color:var(--md-sys-color-primary)">
+        <span id="speedLabel" style="font:var(--md-sys-typescale-label-small);min-width:36px">1.25x</span>
+        <select id="voiceSelect" onchange="selectedVoiceURI=this.value;if(isPlaying){stopSpeech();playAll()}" style="max-width:140px;height:28px;font-size:11px;border:1px solid var(--md-sys-color-outline);border-radius:4px;background:var(--md-sys-color-surface);color:var(--md-sys-color-on-surface)"><option value="">自动</option></select>
+        <button class="md-btn md-btn-text md-btn-sm" id="playBtn" onclick="togglePlay()" title="播放">▶️</button>
+        <button class="md-btn md-btn-text md-btn-sm" onclick="pauseSpeech()" title="暂停">⏸️</button>
+        <button class="md-btn md-btn-text md-btn-sm" onclick="resumeSpeech()" title="继续">▶️</button>
+        <button class="md-btn md-btn-text md-btn-sm" onclick="stopSpeech()" title="停止">⏹</button>
+        <div style="flex:1"></div>
+        <button class="md-btn md-btn-text md-btn-sm pb-mode" data-mode="loop" onclick="setSpeechMode('loop')" title="列表循环">🔁</button>
+        <button class="md-btn md-btn-text md-btn-sm pb-mode" data-mode="shuffle" onclick="setSpeechMode('shuffle')" title="随机播放">🔀</button>
       </div>
     </div>
   </div>
@@ -982,6 +1009,8 @@ function selectCollection(idx) {
   }
   selectedConvs.clear(); selectedSentences.clear(); expandedConvs.clear(); collapsedSections.clear();
   currentPage = 1; activeSectionIdx = -1;
+  // 重置播放
+  stopSpeech(); currentSpeechIndex = -1; currentSpeechList = [];
   // 有分栏的收藏夹：默认折叠除第一个外的所有分栏
   if (currentCollection.hasSections && currentCollection.sections) {
     currentCollection.sections.forEach((sec, i) => {
@@ -991,6 +1020,13 @@ function selectCollection(idx) {
   document.getElementById('searchInput').value = '';
   document.getElementById('searchScope').value = 'current';
   document.getElementById('convList').scrollTop = 0;
+  // 预展开无用户提问的对话
+  const allConvsList = allConvs(currentCollection);
+  allConvsList.forEach((conv, i) => {
+    if (i === 0 || !conv.userQuestion || conv.sentences.some(s => s.tags)) {
+      expandedConvs.add(conv.messageId);
+    }
+  });
   applyFilters();
 }
 
@@ -1070,6 +1106,8 @@ function crossSearch(keyword) {
 function applyFilters() {
   if (isCrossSearch) return;
   if (!currentCollection) return;
+  const wasPlaying = isPlaying;
+  const savedIdx = currentSpeechIndex;
   const keyword = document.getElementById('searchInput').value.toLowerCase().trim();
   const field = document.getElementById('searchField').value;
   const convs = allConvs(currentCollection);
@@ -1106,6 +1144,14 @@ function applyFilters() {
   }
   document.getElementById('searchHint').textContent = keyword ? '找到匹配结果' : '';
   updateToolbar();
+  // 恢复播放高亮
+  if (wasPlaying) {
+    setTimeout(() => {
+      currentSpeechIndex = savedIdx;
+      buildSpeechList();
+      highlightCurrentSentence();
+    }, 100);
+  }
 }
 
 function matchSentence(s, conv, keyword, field) {
@@ -1284,7 +1330,7 @@ function renderConvItem(conv, collection) {
     const tags = [];
     if (s.isMastered) tags.push('<span class="sen-tag mastered">✓ 已掌握</span>');
     if (s.tags) tags.push(`<span class="sen-tag">${escHtml(s.tags)}</span>`);
-    return `<div class="sentence-row">
+    return `<div class="sentence-row" onclick="if(isPlaying)speakSingleSentence(event,'${escAttr(s.content)}','${escAttr(s.lang || 'ja')}')">
       <input type="checkbox" class="md-checkbox" ${isSenSelected ? 'checked' : ''}
         onchange="toggleSentence('${s.id}', this.checked)" onclick="event.stopPropagation()">
       <div class="sen-content">
@@ -1294,6 +1340,7 @@ function renderConvItem(conv, collection) {
         <div class="sen-tags">${tags.join('')}</div>
       </div>
       <span class="sen-lookup" onclick="event.stopPropagation();lookupWord(event,'${escAttr(s.content)}')">📖</span>
+      <span class="sen-lookup" onclick="event.stopPropagation();speakSingleSentence(event,'${escAttr(s.content)}','${escAttr(s.lang || 'ja')}')">🔊</span>
     </div>`;
   }).join('');
 
@@ -1559,6 +1606,160 @@ function findCollectionName(msgId) {
 // ============================================================
 // Word Lookup
 // ============================================================
+let speechRate = 1.25;
+let speechMode = 'loop'; // 'loop', 'shuffle'
+let currentSpeechIndex = -1;
+let currentSpeechList = [];
+let isPlaying = false;
+let speechVoices = [];
+let selectedVoiceURI = '';
+
+// 预加载语音列表
+speechSynthesis.onvoiceschanged = () => { speechVoices = speechSynthesis.getVoices(); updateVoiceSelector(); };
+speechVoices = speechSynthesis.getVoices();
+
+function getVoiceForLang(lang) {
+  if (selectedVoiceURI) { const v = speechVoices.find(v => v.voiceURI === selectedVoiceURI); if (v) return v; }
+  const prefix = lang === 'ja' ? 'ja' : lang === 'en' ? 'en' : lang === 'zh' ? 'zh' : lang;
+  return speechVoices.find(v => v.lang.startsWith(prefix)) || null;
+}
+
+function updateVoiceSelector() {
+  const sel = document.getElementById('voiceSelect');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">自动</option>' +
+    speechVoices.map(v => `<option value="${v.voiceURI}" ${v.voiceURI === selectedVoiceURI ? 'selected' : ''}>${v.name} (${v.lang})</option>`).join('');
+}
+
+function speakSingleSentence(e, text, lang) {
+  buildSpeechList();
+  const row = e.target.closest('.sentence-row');
+  const rows = document.querySelectorAll('#convList .sentence-row');
+  const idx = Array.from(rows).indexOf(row);
+  if (idx < 0) return;
+  currentSpeechIndex = idx;
+  isPlaying = true;
+  updatePlayBtn();
+  const cleanText = cleanRubyText(row.querySelector('.sen-ja'));
+  speakSentence(cleanText, lang, currentSpeechList, currentSpeechIndex);
+}
+
+function speakSentence(text, lang, list, index) {
+  if (!('speechSynthesis' in window)) { snackbar('浏览器不支持语音合成'); return; }
+  window.speechSynthesis.cancel();
+  if (list) { currentSpeechList = list; currentSpeechIndex = index; }
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = lang === 'ja' ? 'ja-JP' : lang === 'en' ? 'en-US' : lang === 'zh' ? 'zh-CN' : lang;
+  const voice = getVoiceForLang(lang);
+  if (voice) u.voice = voice;
+  u.rate = speechRate;
+  u.onend = () => {
+    if (!isPlaying) return;
+    let next;
+    if (speechMode === 'loop') {
+      next = (currentSpeechIndex + 1) % currentSpeechList.length;
+    } else {
+      next = Math.floor(Math.random() * currentSpeechList.length);
+    }
+    currentSpeechIndex = next;
+    highlightCurrentSentence();
+    speakSentence(currentSpeechList[next].content, currentSpeechList[next].lang, currentSpeechList, next);
+  };
+  window.speechSynthesis.speak(u);
+  highlightCurrentSentence();
+}
+
+function highlightCurrentSentence(clear) {
+  document.querySelectorAll('#convList .sentence-row.playing').forEach(el => el.classList.remove('playing'));
+  if (clear || currentSpeechIndex < 0 || currentSpeechIndex >= currentSpeechList.length) return;
+  const rows = document.querySelectorAll('#convList .sentence-row');
+  if (rows[currentSpeechIndex]) {
+    rows[currentSpeechIndex].classList.add('playing');
+    // 自动展开父对话
+    const convCard = rows[currentSpeechIndex].closest('.conv-card');
+    if (convCard && !convCard.classList.contains('expanded')) {
+      const msgId = convCard.dataset.msgId || convCard.querySelector('.conv-card-header')?.getAttribute('onclick')?.match(/toggleConv\('([^']+)'\)/)?.[1];
+      if (msgId) { expandedConvs.add(msgId); convCard.classList.add('expanded'); }
+    }
+    rows[currentSpeechIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+function cleanRubyText(el) {
+  // 移除 ruby 注音，只保留正文
+  const clone = el.cloneNode(true);
+  clone.querySelectorAll('rt').forEach(rt => rt.remove());
+  return clone.textContent.replace(/[\s\n]+/g, ' ').trim();
+}
+
+function buildSpeechList() {
+  const rows = document.querySelectorAll('#convList .sentence-row');
+  currentSpeechList = [];
+  rows.forEach(row => {
+    const ja = row.querySelector('.sen-ja');
+    const lang = row.dataset.lang || 'ja';
+    if (ja) currentSpeechList.push({ content: cleanRubyText(ja), lang });
+  });
+}
+
+function togglePlay() {
+  if (isPlaying) { stopSpeech(); } else { playAll(); }
+}
+
+function playAll() {
+  buildSpeechList();
+  if (currentSpeechList.length === 0) { snackbar('当前列表没有句子'); return; }
+  if (currentSpeechIndex < 0 || currentSpeechIndex >= currentSpeechList.length) currentSpeechIndex = 0;
+  isPlaying = true;
+  updatePlayBtn();
+  speakSentence(currentSpeechList[currentSpeechIndex].content, currentSpeechList[currentSpeechIndex].lang, currentSpeechList, currentSpeechIndex);
+}
+
+function pauseSpeech() {
+  window.speechSynthesis.pause(); isPlaying = false; updatePlayBtn();
+}
+
+function resumeSpeech() {
+  window.speechSynthesis.resume(); isPlaying = true; updatePlayBtn();
+}
+
+function stopSpeech() {
+  window.speechSynthesis.cancel();
+  speechMode = 'loop'; isPlaying = false;
+  document.querySelectorAll('.pb-mode').forEach(b => b.classList.toggle('active', b.dataset.mode === 'loop'));
+  document.querySelectorAll('#convList .sentence-row.playing').forEach(el => el.classList.remove('playing'));
+  updatePlayBtn();
+}
+
+function updatePlayBtn() {
+  const btn = document.getElementById('playBtn');
+  if (btn) { btn.innerHTML = isPlaying ? '⏹' : '▶️'; btn.title = isPlaying ? '停止' : '播放'; }
+}
+// 初始化循环按钮为激活状态
+setTimeout(() => document.querySelector('.pb-mode[data-mode="loop"]')?.classList.add('active'), 0);
+
+function setSpeechMode(mode) {
+  speechMode = mode;
+  document.querySelectorAll('.pb-mode').forEach(b => b.classList.toggle('active', speechMode === b.dataset.mode));
+  if (!isPlaying && currentSpeechList.length > 0) { playAll(); }
+}
+
+// 回到顶部悬浮按钮
+(function() {
+  const btn = document.createElement('button');
+  btn.id = 'backToTopBtn';
+  btn.innerHTML = '⬆';
+  btn.title = '回到顶部';
+  btn.style.cssText = 'position:fixed;bottom:80px;right:24px;width:40px;height:40px;border-radius:50%;border:none;background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container);font-size:18px;cursor:pointer;z-index:50;box-shadow:var(--md-sys-elevation-2);opacity:0;transition:opacity .3s;pointer-events:none';
+  btn.onclick = () => document.getElementById('convList').scrollTo({ top: 0, behavior: 'smooth' });
+  document.body.appendChild(btn);
+  document.getElementById('convList').addEventListener('scroll', () => {
+    const show = document.getElementById('convList').scrollTop > 300;
+    btn.style.opacity = show ? '1' : '0';
+    btn.style.pointerEvents = show ? 'auto' : 'none';
+  });
+})();
+
 function lookupWord(e, sentence) {
   document.querySelectorAll('.pitch-popup').forEach(el => el.remove());
   const isJapanese = /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]/.test(sentence);
