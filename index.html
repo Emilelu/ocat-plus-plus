@@ -1131,7 +1131,6 @@ function renderConversations(convs) {
 }
 
 function renderSections(sections) {
-  currentPage = 1; // 分栏模式始终从第 1 页开始（因为分栏结构需要完整渲染）
   const container = document.getElementById('convList');
   const navContainer = document.getElementById('sectionNav');
   if (sections.length === 0) {
@@ -1164,6 +1163,7 @@ function renderSections(sections) {
     flatItems.push({ type: 'close', html: '</div></div>' });
   });
 
+  currentPage = Math.min(currentPage, Math.ceil(flatItems.length / PAGE_SIZE) || 1);
   _renderPageAt(flatItems, container, (item) => item.html, currentPage);
 }
 
