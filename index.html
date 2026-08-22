@@ -619,7 +619,7 @@ body {
   <button class="md-btn md-btn-filled" onclick="openDatabase()">📂 选择数据库</button>
   <button class="md-btn md-btn-tonal" onclick="syncFromPhone()" title="通过 ADB 从手机同步最新数据库">📱 同步手机</button>
   <span class="stats" id="headerStats"></span>
-  <button class="md-btn md-btn-text md-btn-sm" onclick="clearCache()" title="清除缓存重新解析" style="font-size:11px;opacity:.6">🔄</button>
+  <button class="md-btn md-btn-outlined md-btn-sm" onclick="clearCache()" title="清除缓存重新解析">🔄</button>
 </div>
 
 <div class="search-bar">
@@ -672,7 +672,7 @@ body {
       <div class="scroll-list" id="convList">
         <div class="empty-state">
           <div class="icon">📂</div>
-          <div class="title">欢迎使用 OCAT 查看器</div>
+          <div class="title">欢迎使用 OCAT++</div>
           <div class="desc">点击上方「选择数据库」加载 SQLite DB 文件</div>
         </div>
       </div>
@@ -745,7 +745,7 @@ async function syncFromPhone() {
 
 function showSyncHelp() {
   document.getElementById('dbStatus').textContent = '未加载'; document.getElementById('dbStatus').className = 'db-chip';
-  const cmd = 'cd /d D:\\ocat_tool && python sync_server.py';
+  const cmd = `cd /d "${window.location.href.replace('/index.html','').replace('file:///','').replace(/\//g,'\\\\')}" && python sync_server.py`;
   document.getElementById('modalBody').innerHTML = `
     <div style="text-align:center;padding:16px">
       <div style="font-size:48px;margin-bottom:12px">📱</div>
@@ -765,7 +765,7 @@ async function clearCache() {
     indexedDB.deleteDatabase('ocat_cache');
     DATA = []; currentCollection = null;
     renderNav();
-    document.getElementById('convList').innerHTML = `<div class="empty-state"><div class="icon">📂</div><div class="title">欢迎使用 OCAT 查看器</div><div class="desc">点击上方「选择数据库」加载 SQLite DB 文件</div></div>`;
+    document.getElementById('convList').innerHTML = `<div class="empty-state"><div class="icon">📂</div><div class="title">欢迎使用 OCAT++</div><div class="desc">点击上方「选择数据库」加载 SQLite DB 文件</div></div>`;
     document.getElementById('dbStatus').textContent = '未加载';
     document.getElementById('dbStatus').className = 'db-chip';
     document.getElementById('searchInput').disabled = true;
