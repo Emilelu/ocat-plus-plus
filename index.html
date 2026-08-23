@@ -568,11 +568,13 @@ body {
    Snackbar / Toast
    ============================================================ */
 .snackbar {
-  position: fixed; top: 16px; right: 16px;
-  background: var(--md-sys-color-on-surface); color: var(--md-sys-color-surface);
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--md-sys-color-inverse-surface);
+  color: var(--md-sys-color-inverse-on-surface);
   padding: 12px 24px; border-radius: var(--md-sys-shape-corner-s);
   font: var(--md-sys-typescale-body-medium); z-index: 200;
-  box-shadow: var(--md-sys-elevation-2);
+  box-shadow: var(--md-sys-elevation-2); cursor: pointer;
+  white-space: nowrap; max-width: 80vw; overflow: hidden; text-overflow: ellipsis;
   animation: snackbar-in var(--md-sys-motion-duration-short) var(--md-sys-motion-easing-standard);
   transition: opacity var(--md-sys-motion-duration-long);
 }
@@ -634,6 +636,8 @@ body {
   <button class="md-btn md-btn-filled" onclick="openDatabase()">📂 选择数据库</button>
   <button class="md-btn md-btn-tonal" onclick="syncFromPhone()" title="通过 ADB 从手机同步最新数据库">📱 同步手机</button>
   <span class="stats" id="headerStats"></span>
+  <button class="md-btn md-btn-outlined md-btn-sm" onclick="openImportDialog()" title="从其他数据库导入收藏夹">📥</button>
+  <button class="md-btn md-btn-outlined md-btn-sm" onclick="saveDatabase()" title="保存数据库到文件">💾</button>
   <button class="md-btn md-btn-outlined md-btn-sm" onclick="clearCache()" title="清除缓存重新解析">🔄</button>
 </div>
 
@@ -728,6 +732,7 @@ body {
 // State
 // ============================================================
 let db = null;
+let dbFileName = 'OCAT.db';
 let DATA = [];
 let currentCollection = null;
 let selectedConvs = new Set();
@@ -800,6 +805,112 @@ function showSyncHelp() {
   document.getElementById('modalOverlay').style.display = 'flex';
 }
 
+function saveDatabase() {
+  if (!db) { snackbar('请先加载一个数据库'); return; }
+  const data = db.export();
+  const blob = new Blob([data], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = dbFileName || 'OCAT.db';
+  a.click();
+  URL.revokeObjectURL(url);
+  snackbar('数据库已导出，请替换原文件', true);
+}
+
+async function openImportDialog() {
+  if (!db) { snackbar('请先加载一个数据库'); return; }
+  const input = document.createElement('input');
+  input.type = 'file'; input.accept = '.db';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const buf = await file.arrayBuffer();
+    const SQL = await initSqlJs({ locateFile: f => `https://sql.js.org/dist/${f}` });
+    const srcDb = new SQL.Database(new Uint8Array(buf));
+    const collections = srcDb.exec("SELECT id, title, lang, translationLang, summary FROM CollectionList WHERE deleted = 0 ORDER BY \`index\`");
+    srcDb.close();
+    if (!collections.length || !collections[0].values.length) { snackbar('源数据库中没有收藏夹'); return; }
+    const rows = collections[0].values;
+    let html = '<div style="padding:16px"><div style="font:var(--md-sys-typescale-title-medium);margin-bottom:12px">选择要导入的收藏夹</div>';
+    html += rows.map((r, i) => `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer">
+      <input type="checkbox" class="md-checkbox" checked data-id="${r[0]}">
+      <span>${escHtml(r[1])} <span style="color:var(--md-sys-color-on-surface-variant);font-size:12px">${r[2] || ''} ${r[3] ? '→ '+r[3] : ''}</span></span>
+    </label>`).join('');
+    html += `<div style="margin-top:16px;display:flex;gap:8px">
+      <button class="md-btn md-btn-filled" onclick="importSelectedCollections('${file.name}')">确认导入</button>
+      <button class="md-btn md-btn-text" onclick="closeModal()">取消</button>
+    </div></div>`;
+    document.getElementById('modalBody').innerHTML = html;
+    document.getElementById('modalOverlay').style.display = 'flex';
+    // 保存源文件数据供后续使用
+    window._importBuf = buf;
+    window._importRows = rows;
+  };
+  input.click();
+}
+
+async function importSelectedCollections(fileName) {
+  if (!db || !window._importBuf) return;
+  const selectedIds = Array.from(document.querySelectorAll('#modalBody input[type=checkbox]:checked')).map(cb => cb.dataset.id);
+  if (!selectedIds.length) { snackbar('请选择至少一个收藏夹'); return; }
+  closeModal();
+  const SQL = await initSqlJs({ locateFile: f => `https://sql.js.org/dist/${f}` });
+  const srcDb = new SQL.Database(new Uint8Array(window._importBuf));
+  let imported = 0;
+  db.run('BEGIN TRANSACTION');
+  try {
+    for (const colId of selectedIds) {
+      // 检查是否已存在
+      const existing = db.exec(`SELECT id FROM CollectionList WHERE id = '${colId}'`);
+      if (existing.length && existing[0].values.length) continue;
+      // 复制 CollectionList
+      const cl = srcDb.exec(`SELECT * FROM CollectionList WHERE id = '${colId}'`);
+      if (!cl.length || !cl[0].values.length) continue;
+      const clRow = cl[0].values[0];
+      const clCols = cl[0].columns;
+      // 转义保留字段名（index 是 SQLite 保留字）
+      const clEscaped = clCols.map(c => `\`${c}\``).join(',');
+      db.run(`INSERT OR IGNORE INTO CollectionList (${clEscaped}) VALUES (${clRow.map(v => v === null ? 'NULL' : `'${String(v).replace(/'/g,"''")}'`).join(',')})`);
+      // 复制 Collection
+      const colls = srcDb.exec(`SELECT * FROM Collection WHERE collectionListId = '${colId}' AND deleted = 0`);
+      if (colls.length) {
+        const cCols = colls[0].columns;
+        const cEscaped = cCols.map(c => `\`${c}\``).join(',');
+        for (const row of colls[0].values) {
+          db.run(`INSERT OR IGNORE INTO Collection (${cEscaped}) VALUES (${row.map(v => v === null ? 'NULL' : `'${String(v).replace(/'/g,"''")}'`).join(',')})`);
+        }
+      }
+      // 复制 LocalMessage
+      const msgs = srcDb.exec(`SELECT * FROM LocalMessage WHERE id IN (SELECT messageId FROM Collection WHERE collectionListId = '${colId}' AND messageId IS NOT NULL)`);
+      if (msgs.length) {
+        const mCols = msgs[0].columns;
+        const mEscaped = mCols.map(c => `\`${c}\``).join(',');
+        for (const row of msgs[0].values) {
+          db.run(`INSERT OR IGNORE INTO LocalMessage (${mEscaped}) VALUES (${row.map(v => v === null ? 'NULL' : `'${String(v).replace(/'/g,"''")}'`).join(',')})`);
+        }
+      }
+      imported++;
+    }
+    db.run('COMMIT');
+    srcDb.close();
+    delete window._importBuf;
+    delete window._importRows;
+    snackbar(`成功导入 ${imported} 个收藏夹`);
+    // 重新加载数据
+    await loadAllData();
+    cacheData(db.name || 'OCAT.db');
+    renderNav();
+    if (currentCollection) {
+      applyFilters();
+    }
+  } catch(e) {
+    db.run('ROLLBACK');
+    srcDb.close();
+    snackbar('导入失败: ' + e.message);
+  }
+}
+
 async function clearCache() {
   const req = indexedDB.open('ocat_cache', 1);
   req.onsuccess = () => {
@@ -825,6 +936,7 @@ async function openDatabase() {
     if (!file) return;
     try {
       const buf = await file.arrayBuffer();
+      dbFileName = file.name;
       await loadDB(buf, file.name);
       // 缓存解析后的数据
       cacheData(file.name);
@@ -2028,8 +2140,19 @@ function snackbar(msg, success) {
   el.textContent = (success ? '✅ ' : '') + msg;
   el.style.display = 'block';
   el.classList.remove('hiding');
-  clearTimeout(snackTimer);
-  snackTimer = setTimeout(() => { el.classList.add('hiding'); setTimeout(() => el.style.display = 'none', 400); }, 2500);
+  clearTimeout(window._snackTimer);
+  // 鼠标悬浮不消失，点击立即关闭
+  el.onmouseenter = () => clearTimeout(window._snackTimer);
+  el.onmouseleave = () => { clearTimeout(window._snackTimer); window._snackTimer = setTimeout(() => hideSnackbar(), 2500); };
+  el.onclick = () => hideSnackbar();
+  window._snackTimer = setTimeout(() => hideSnackbar(), 2500);
+}
+
+function hideSnackbar() {
+  const el = document.getElementById('snackbar');
+  if (!el || el.style.display === 'none') return;
+  el.classList.add('hiding');
+  setTimeout(() => { el.style.display = 'none'; el.classList.remove('hiding'); }, 400);
 }
 
 // Keyboard
