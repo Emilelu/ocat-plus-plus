@@ -700,13 +700,12 @@ body {
           style="width:80px;accent-color:var(--md-sys-color-primary)">
         <span id="speedLabel" style="font:var(--md-sys-typescale-label-small);min-width:36px">1.25x</span>
         <select id="voiceSelect" onchange="selectedVoiceURI=this.value;if(isPlaying){stopSpeech();playAll()}" style="max-width:140px;height:28px;font-size:11px;border:1px solid var(--md-sys-color-outline);border-radius:4px;background:var(--md-sys-color-surface);color:var(--md-sys-color-on-surface)"><option value="">自动</option></select>
-        <button class="md-btn md-btn-text md-btn-sm" id="playBtn" onclick="togglePlay()" title="播放">▶️</button>
-        <button class="md-btn md-btn-text md-btn-sm" onclick="pauseSpeech()" title="暂停">⏸️</button>
-        <button class="md-btn md-btn-text md-btn-sm" onclick="resumeSpeech()" title="继续">▶️</button>
-        <button class="md-btn md-btn-text md-btn-sm" onclick="stopSpeech()" title="停止">⏹</button>
         <div style="flex:1"></div>
-        <button class="md-btn md-btn-text md-btn-sm pb-mode" data-mode="loop" onclick="setSpeechMode('loop')" title="列表循环">🔁</button>
-        <button class="md-btn md-btn-text md-btn-sm pb-mode" data-mode="shuffle" onclick="setSpeechMode('shuffle')" title="随机播放">🔀</button>
+        <button class="md-btn md-btn-text md-btn-sm" onclick="skipPrev()" title="上一句">⏮</button>
+        <button class="md-btn md-btn-text md-btn-sm" id="playBtn" onclick="togglePlay()" title="播放" style="font-size:18px">▶️</button>
+        <button class="md-btn md-btn-text md-btn-sm" onclick="skipNext()" title="下一句">⏭</button>
+        <button class="md-btn md-btn-text md-btn-sm" onclick="stopSpeech()" title="停止">⏹</button>
+        <button class="md-btn md-btn-text md-btn-sm" id="modeBtn" onclick="cycleMode()" title="播放模式">🔁</button>
       </div>
     </div>
   </div>
@@ -1231,6 +1230,13 @@ function _renderPageAt(items, container, renderer, page) {
   container.innerHTML = slice.map(renderer).join('');
   renderPage = end;
 
+  // 播放中切换页面时重建列表
+  if (isPlaying) {
+    buildSpeechList();
+    // 如果当前索引超出新列表范围，重置到 0
+    if (currentSpeechIndex >= currentSpeechList.length) currentSpeechIndex = 0;
+  }
+
   // 移除旧分页
   const oldPager = document.getElementById('paginationBar');
   if (oldPager) oldPager.remove();
@@ -1656,6 +1662,20 @@ function speakSingleSentence(e, text, lang) {
   speakSentence(cleanText, lang, currentSpeechList, currentSpeechIndex);
 }
 
+// 当句子列表不足时自动翻页（当前页播放完后自动翻到下一页）
+function ensurePlaylistFilled() {
+  if (currentSpeechIndex < currentSpeechList.length - 1) return;
+  const items = window.currentRenderItems;
+  if (!items) return;
+  const totalPages = Math.ceil(items.length / PAGE_SIZE);
+  if (currentPage >= totalPages) return;
+  const container = document.getElementById('convList');
+  const renderer = window.currentRenderer;
+  _renderPageAt(items, container, renderer, currentPage + 1);
+  buildSpeechList();
+  currentSpeechIndex = 0;
+}
+
 function speakSentence(text, lang, list, index) {
   if (!('speechSynthesis' in window)) { snackbar('浏览器不支持语音合成'); return; }
   window.speechSynthesis.cancel();
@@ -1667,15 +1687,33 @@ function speakSentence(text, lang, list, index) {
   u.rate = speechRate;
   u.onend = () => {
     if (!isPlaying) return;
-    let next;
-    if (speechMode === 'loop') {
-      next = (currentSpeechIndex + 1) % currentSpeechList.length;
-    } else {
-      next = Math.floor(Math.random() * currentSpeechList.length);
+    // 当前页最后一句，loop 模式自动翻页
+    if (currentSpeechIndex >= currentSpeechList.length - 1 && speechMode === 'loop') {
+      const items = window.currentRenderItems;
+      if (items) {
+        const totalPages = Math.ceil(items.length / PAGE_SIZE);
+        if (currentPage < totalPages) {
+          _renderPageAt(items, document.getElementById('convList'), window.currentRenderer, currentPage + 1);
+          buildSpeechList();
+          if (currentSpeechList.length > 0) {
+            currentSpeechIndex = 0;
+            speakSentence(currentSpeechList[0].content, currentSpeechList[0].lang, currentSpeechList, 0);
+          }
+          return;
+        }
+      }
+      // 最后一页，停止
+      isPlaying = false; updatePlayBtn();
+      return;
     }
-    currentSpeechIndex = next;
+    if (speechMode === 'loop') {
+      currentSpeechIndex = (currentSpeechIndex + 1) % currentSpeechList.length;
+    } else {
+      // 随机播放：跨页随机
+      currentSpeechIndex = Math.floor(Math.random() * currentSpeechList.length);
+    }
     highlightCurrentSentence();
-    speakSentence(currentSpeechList[next].content, currentSpeechList[next].lang, currentSpeechList, next);
+    speakSentence(currentSpeechList[currentSpeechIndex].content, currentSpeechList[currentSpeechIndex].lang, currentSpeechList, currentSpeechIndex);
   };
   window.speechSynthesis.speak(u);
   highlightCurrentSentence();
@@ -1715,7 +1753,55 @@ function buildSpeechList() {
 }
 
 function togglePlay() {
-  if (isPlaying) { stopSpeech(); } else { playAll(); }
+  if (isPlaying) {
+    window.speechSynthesis.pause(); isPlaying = false; updatePlayBtn();
+  } else {
+    // 如果暂停了，继续播放
+    if (window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
+      return;
+    }
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume(); isPlaying = true; updatePlayBtn();
+    } else {
+      playAll();
+    }
+  }
+}
+
+function skipPrev() {
+  if (currentSpeechList.length === 0) { buildSpeechList(); if (currentSpeechList.length === 0) return; }
+  currentSpeechIndex = speechMode === 'shuffle' ? Math.floor(Math.random() * currentSpeechList.length) : (currentSpeechIndex - 1 + currentSpeechList.length) % currentSpeechList.length;
+  if (!isPlaying) { isPlaying = true; updatePlayBtn(); }
+  else { window.speechSynthesis.cancel(); }
+  speakSentence(currentSpeechList[currentSpeechIndex].content, currentSpeechList[currentSpeechIndex].lang, currentSpeechList, currentSpeechIndex);
+}
+
+function skipNext() {
+  if (currentSpeechList.length === 0) { buildSpeechList(); if (currentSpeechList.length === 0) return; }
+  if (speechMode === 'shuffle') {
+    currentSpeechIndex = Math.floor(Math.random() * currentSpeechList.length);
+  } else {
+    // 当前页最后一句，翻页
+    if (currentSpeechIndex >= currentSpeechList.length - 1) {
+      const items = window.currentRenderItems;
+      if (items) {
+        const totalPages = Math.ceil(items.length / PAGE_SIZE);
+        if (currentPage < totalPages) {
+          _renderPageAt(items, document.getElementById('convList'), window.currentRenderer, currentPage + 1);
+          buildSpeechList();
+          currentSpeechIndex = 0;
+          if (!isPlaying) { isPlaying = true; updatePlayBtn(); }
+          else { window.speechSynthesis.cancel(); }
+          speakSentence(currentSpeechList[0].content, currentSpeechList[0].lang, currentSpeechList, 0);
+          return;
+        }
+      }
+    }
+    currentSpeechIndex = (currentSpeechIndex + 1) % currentSpeechList.length;
+  }
+  if (!isPlaying) { isPlaying = true; updatePlayBtn(); }
+  else { window.speechSynthesis.cancel(); }
+  speakSentence(currentSpeechList[currentSpeechIndex].content, currentSpeechList[currentSpeechIndex].lang, currentSpeechList, currentSpeechIndex);
 }
 
 function playAll() {
@@ -1727,34 +1813,33 @@ function playAll() {
   speakSentence(currentSpeechList[currentSpeechIndex].content, currentSpeechList[currentSpeechIndex].lang, currentSpeechList, currentSpeechIndex);
 }
 
-function pauseSpeech() {
-  window.speechSynthesis.pause(); isPlaying = false; updatePlayBtn();
-}
-
-function resumeSpeech() {
-  window.speechSynthesis.resume(); isPlaying = true; updatePlayBtn();
-}
-
 function stopSpeech() {
   window.speechSynthesis.cancel();
-  speechMode = 'loop'; isPlaying = false;
-  document.querySelectorAll('.pb-mode').forEach(b => b.classList.toggle('active', b.dataset.mode === 'loop'));
+  isPlaying = false;
   document.querySelectorAll('#convList .sentence-row.playing').forEach(el => el.classList.remove('playing'));
   updatePlayBtn();
 }
 
 function updatePlayBtn() {
   const btn = document.getElementById('playBtn');
-  if (btn) { btn.innerHTML = isPlaying ? '⏹' : '▶️'; btn.title = isPlaying ? '停止' : '播放'; }
+  if (btn) {
+    if (window.speechSynthesis.paused) { btn.innerHTML = '▶️'; btn.title = '继续'; }
+    else if (isPlaying) { btn.innerHTML = '⏸️'; btn.title = '暂停'; }
+    else { btn.innerHTML = '▶️'; btn.title = '播放'; }
+  }
 }
-// 初始化循环按钮为激活状态
-setTimeout(() => document.querySelector('.pb-mode[data-mode="loop"]')?.classList.add('active'), 0);
 
-function setSpeechMode(mode) {
-  speechMode = mode;
-  document.querySelectorAll('.pb-mode').forEach(b => b.classList.toggle('active', speechMode === b.dataset.mode));
+function cycleMode() {
+  const modes = ['loop', 'shuffle'];
+  const idx = (modes.indexOf(speechMode) + 1) % modes.length;
+  speechMode = modes[idx];
+  document.getElementById('modeBtn').innerHTML = speechMode === 'loop' ? '🔁' : '🔀';
+  document.getElementById('modeBtn').title = speechMode === 'loop' ? '列表循环' : '随机播放';
   if (!isPlaying && currentSpeechList.length > 0) { playAll(); }
 }
+
+// 初始化模式按钮
+setTimeout(() => { document.getElementById('modeBtn').innerHTML = '🔁'; document.getElementById('modeBtn').title = '列表循环'; }, 0);
 
 // 回到顶部悬浮按钮
 (function() {
