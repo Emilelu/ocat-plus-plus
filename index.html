@@ -7,8 +7,15 @@
   <title>OCAT++</title>
   <link rel="icon" href="https://writer.drakeet.com/images/orca_dark.png">
   <script>
-    // 尽早恢复上次的主题，避免加载闪烁
-    try { var _ocatTheme = localStorage.getItem('ocat_theme'); if (_ocatTheme) document.documentElement.setAttribute('data-theme', _ocatTheme); } catch (e) {}
+    // 尽早恢复上次的主题/皮肤/缩放，避免加载闪烁
+    try {
+      var _ocatTheme = localStorage.getItem('ocat_theme');
+      if (_ocatTheme) document.documentElement.setAttribute('data-theme', _ocatTheme);
+      if (localStorage.getItem('ocat_skin') === 'glass') document.documentElement.setAttribute('data-skin', 'glass');
+      var _ocatZoom = localStorage.getItem('ocat_zoom');
+      if (_ocatZoom === null) _ocatZoom = (screen.width >= 3000) ? '1.25' : '1';   // 大屏默认放大
+      if (parseFloat(_ocatZoom) !== 1) document.documentElement.style.zoom = _ocatZoom;
+    } catch (e) {}
   </script>
   <script src="vendor/sql-wasm.js"></script>
   <script src="vendor/marked.min.js"></script>
@@ -142,6 +149,26 @@
 }
 
 /* ============================================================
+   Icon Font (Material Icons — 本地 vendor/，离线可用)
+   ============================================================ */
+@font-face {
+  font-family: 'Material Icons';
+  font-style: normal;
+  font-weight: 400;
+  src: url('vendor/material-icons.woff2') format('woff2');
+}
+.mi {
+  font-family: 'Material Icons';
+  font-weight: normal; font-style: normal;
+  font-size: 20px; line-height: 1;
+  letter-spacing: normal; text-transform: none;
+  display: inline-block; white-space: nowrap; word-wrap: normal;
+  direction: ltr; font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+  user-select: none; -webkit-user-select: none; flex-shrink: 0;
+}
+
+/* ============================================================
    Base
    ============================================================ */
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -203,11 +230,25 @@ body {
 }
 
 .md-btn-icon {
-  padding: 8px; border-radius: var(--md-sys-shape-corner-full); min-width: 40px; min-height: 40px;
+  width: 40px; height: 40px; padding: 0;
+  border-radius: var(--md-sys-shape-corner-full);
   justify-content: center; background: transparent;
+  flex-shrink: 0;
 }
+.md-btn-icon .mi { font-size: 20px; }
 
 .md-btn-sm { padding: 6px 16px; font: var(--md-sys-typescale-label-medium); }
+.md-btn-sm .mi { font-size: 16px; }
+
+/* 统一交互反馈 */
+.md-btn:active { transform: scale(.95); }
+.md-btn, .md-chip, .nav-rail-item, .nav-chip, .pager-btn {
+  -webkit-tap-highlight-color: transparent;
+}
+.md-btn:focus-visible, .md-chip:focus-visible, .nav-rail-item:focus-visible,
+.modal-close:focus-visible, .pager-btn:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px;
+}
 
 /* ============================================================
    Search Bar
@@ -249,7 +290,7 @@ body {
 /* ============================================================
    Main Layout
    ============================================================ */
-.main { display: flex; height: calc(100vh - 120px); }
+.main { display: flex; height: calc(100% - 120px); }
 
 /* Navigation Rail */
 .nav-rail {
@@ -264,6 +305,18 @@ body {
   transition: background .2s;
 }
 .nav-rail-resizer:hover, .nav-rail-resizer.active { background: var(--md-sys-color-primary); }
+.nav-search { width: 100%; padding: 2px 8px 8px; flex-shrink: 0; }
+.nav-search-field {
+  display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 10px;
+  background: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-sys-shape-corner-full);
+}
+.nav-search-field .mi { font-size: 16px; color: var(--md-sys-color-on-surface-variant); }
+.nav-search-field input {
+  border: none; background: transparent; outline: none; width: 100%; min-width: 0;
+  font: var(--md-sys-typescale-body-small); color: var(--md-sys-color-on-surface);
+}
+.nav-search-field input::placeholder { color: var(--md-sys-color-on-surface-variant); }
 .nav-rail-item {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
   padding: 12px 4px; width: 100%; border-radius: var(--md-sys-shape-corner-l);
@@ -347,9 +400,15 @@ body {
 .playback-bar {
   background: var(--md-sys-color-surface-container-high);
   border-top: 1px solid var(--md-sys-color-outline-variant);
-  padding: 6px 16px; display: flex; align-items: center; gap: 8px;
+  padding: 6px 16px; display: flex; align-items: center; gap: 6px;
   flex-shrink: 0;
 }
+.playback-bar .md-btn { min-width: 40px; width: 40px; height: 40px; padding: 0; justify-content: center; }
+.playback-bar .pb-play {
+  background: var(--md-sys-color-primary); color: var(--md-sys-color-on-primary);
+  box-shadow: var(--md-sys-elevation-1);
+}
+.playback-bar .pb-play:hover { box-shadow: var(--md-sys-elevation-2); }
 .playback-bar .pb-mode.active { color: var(--md-sys-color-primary); }
 
 /* ============================================================
@@ -360,6 +419,9 @@ body {
   border-radius: var(--md-sys-shape-corner-m); margin-bottom: 8px;
   overflow: hidden; transition: all var(--md-sys-motion-duration-short) var(--md-sys-motion-easing-standard);
   animation: card-in var(--md-sys-motion-duration-medium) var(--md-sys-motion-easing-emphasized) both;
+  /* 长列表性能：屏外卡片跳过渲染布局 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
 }
 @keyframes card-in {
   from { opacity: 0; transform: translateY(16px); }
@@ -449,18 +511,20 @@ body {
 
 .sentence-row .sen-content { flex: 1; }
 .sentence-row .sen-ja {
-  font-family: var(--font-ja); font-size: 15px; line-height: 2.8; margin-bottom: 2px;
+  font-family: var(--font-ja); font-size: 15px; line-height: 2.5; margin-bottom: 2px;
 }
-.sentence-row .sen-ja ruby {
-  ruby-position: over;
-  -webkit-ruby-position: over;
-  ruby-align: center;
-  white-space: nowrap;
+/* 自定义注音：rt 绝对定位悬浮在汉字上方，完全不参与排版，
+   因此不会像原生 ruby 那样把正文挤开或错位 */
+.sentence-row .sen-ja .rb {
+  position: relative; display: inline-block;
 }
-.sentence-row .sen-ja rt {
-  font-size: .45em; color: var(--md-sys-color-on-surface-variant);
-  font-family: var(--font-ja); line-height: 1.2; text-align: center;
-  letter-spacing: normal;
+.sentence-row .sen-ja .rb .rt {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: calc(100% - .55em);
+  font-family: var(--font-ja); font-size: .55em; line-height: 1.3;
+  color: var(--md-sys-color-on-surface-variant);
+  text-align: center; white-space: nowrap;
+  pointer-events: none;
   user-select: none; -webkit-user-select: none;
 }
 .sentence-row .sen-ruby { font: var(--md-sys-typescale-body-small); color: var(--md-sys-color-on-surface-variant); }
@@ -475,11 +539,16 @@ body {
   background: var(--md-sys-color-success-container); color: var(--md-sys-color-success);
 }
 .sentence-row .sen-lookup {
-  font: var(--md-sys-typescale-label-small); color: var(--md-sys-color-primary);
-  cursor: pointer; text-decoration: underline; text-decoration-style: dotted;
-  white-space: nowrap; flex-shrink: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer; white-space: nowrap; flex-shrink: 0;
+  width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--md-sys-shape-corner-full);
+  transition: background var(--md-sys-motion-duration-short), color var(--md-sys-motion-duration-short);
 }
-.sentence-row .sen-lookup:hover { color: var(--md-sys-color-on-primary-container); }
+.sentence-row .sen-lookup .mi { font-size: 18px; }
+.sentence-row .sen-lookup:hover { background: var(--md-sys-state-hover); color: var(--md-sys-color-primary); }
+.sentence-row .sen-lookup.sen-mastered.on { color: var(--md-sys-color-success); }
+.sentence-row .sen-lookup.sen-mastered.on:hover { color: var(--md-sys-color-error); }
 
 /* ============================================================
    Section Group
@@ -513,6 +582,12 @@ body {
   position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 100;
   display: flex; align-items: center; justify-content: center;
   animation: fade-in var(--md-sys-motion-duration-short) var(--md-sys-motion-easing-standard);
+  transition: opacity 160ms var(--md-sys-motion-easing-standard);
+}
+.modal-scrim.closing { opacity: 0; pointer-events: none; }
+.modal-scrim.closing .modal-dialog {
+  opacity: 0; transform: scale(.96) translateY(16px);
+  transition: opacity 160ms var(--md-sys-motion-easing-standard), transform 160ms var(--md-sys-motion-easing-standard);
 }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 .modal-dialog {
@@ -626,12 +701,105 @@ body {
 .pitch-popup a:hover { color: var(--md-sys-color-on-primary-container); }
 
 /* ============================================================
+   Pagination (B站风格：首页/末页常驻、当前页居中窗口、前后翻页)
+   ============================================================ */
+.pager-btn {
+  min-width: 32px; height: 30px; padding: 0 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--md-sys-shape-corner-s); cursor: pointer;
+  font: var(--md-sys-typescale-label-medium);
+  color: var(--md-sys-color-on-surface-variant);
+  user-select: none; transition: background var(--md-sys-motion-duration-short), color var(--md-sys-motion-duration-short);
+}
+.pager-btn:hover { background: var(--md-sys-state-hover); color: var(--md-sys-color-on-surface); }
+.pager-btn.active { background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); font-weight: 600; }
+.pager-btn.disabled { opacity: .35; pointer-events: none; }
+.pager-ellipsis { padding: 0 2px; color: var(--md-sys-color-on-surface-variant); user-select: none; }
+
+/* ============================================================
    Scrollbar
    ============================================================ */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--md-sys-color-outline-variant); border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--md-sys-color-outline); }
+
+/* ============================================================
+   Skin: 液态玻璃 (html[data-skin="glass"])
+   半透明表面 + 背景 blur，卡片不加 blur（性能友好）
+   ============================================================ */
+html[data-skin="glass"] :is(.top-bar, .search-bar, .toolbar, .filter-chips, .section-nav,
+    .playback-bar, #paginationBar, .nav-rail, .modal-dialog, .pitch-popup, .snackbar) {
+  backdrop-filter: blur(28px) saturate(1.7);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
+}
+html[data-skin="glass"] .conv-card,
+html[data-skin="glass"] .section-group {
+  border: 1px solid rgba(255,255,255,.55);
+  box-shadow: 0 6px 24px rgba(60,70,130,.10);
+}
+html[data-skin="glass"] .conv-card:hover { box-shadow: 0 8px 30px rgba(60,70,130,.16); }
+
+/* --- 浅色玻璃 --- */
+html[data-skin="glass"] body {
+  background:
+    radial-gradient(1200px 800px at 88% -10%, rgba(122,152,255,.32), transparent 60%),
+    radial-gradient(1000px 700px at -10% 110%, rgba(140,214,196,.30), transparent 60%),
+    linear-gradient(135deg, #dde6fa 0%, #f2e6f5 52%, #dcefec 100%);
+  background-attachment: fixed;
+}
+html[data-skin="glass"] {
+  --md-sys-color-surface: rgba(255,255,255,.42);
+  --md-sys-color-surface-container: rgba(255,255,255,.52);
+  --md-sys-color-surface-container-high: rgba(255,255,255,.62);
+  --md-sys-color-primary-container: rgba(210,224,255,.72);
+  --md-sys-color-success-container: rgba(206,246,214,.75);
+  --md-sys-color-error-container: rgba(255,216,212,.8);
+}
+
+/* --- 深色玻璃 --- */
+html[data-skin="glass"][data-theme="dark"] body {
+  background:
+    radial-gradient(1200px 800px at 88% -10%, rgba(96,116,220,.28), transparent 60%),
+    radial-gradient(1000px 700px at -10% 110%, rgba(52,150,140,.22), transparent 60%),
+    linear-gradient(135deg, #10131c 0%, #171527 52%, #0e1a1c 100%);
+  background-attachment: fixed;
+}
+html[data-skin="glass"][data-theme="dark"] {
+  --md-sys-color-surface: rgba(22,24,33,.5);
+  --md-sys-color-surface-container: rgba(30,33,45,.55);
+  --md-sys-color-surface-container-high: rgba(38,42,56,.6);
+  --md-sys-color-primary-container: rgba(64,86,138,.6);
+  --md-sys-color-success-container: rgba(24,66,40,.6);
+  --md-sys-color-error-container: rgba(120,20,26,.55);
+}
+html[data-skin="glass"][data-theme="dark"] .conv-card,
+html[data-skin="glass"][data-theme="dark"] .section-group {
+  border-color: rgba(255,255,255,.09);
+  box-shadow: 0 6px 24px rgba(0,0,0,.35);
+}
+@media (prefers-color-scheme: dark) {
+  html[data-skin="glass"]:not([data-theme="light"]) body {
+    background:
+      radial-gradient(1200px 800px at 88% -10%, rgba(96,116,220,.28), transparent 60%),
+      radial-gradient(1000px 700px at -10% 110%, rgba(52,150,140,.22), transparent 60%),
+      linear-gradient(135deg, #10131c 0%, #171527 52%, #0e1a1c 100%);
+    background-attachment: fixed;
+  }
+  html[data-skin="glass"]:not([data-theme="light"]) {
+    --md-sys-color-surface: rgba(22,24,33,.5);
+    --md-sys-color-surface-container: rgba(30,33,45,.55);
+    --md-sys-color-surface-container-high: rgba(38,42,56,.6);
+    --md-sys-color-primary-container: rgba(64,86,138,.6);
+    --md-sys-color-success-container: rgba(24,66,40,.6);
+    --md-sys-color-error-container: rgba(120,20,26,.55);
+  }
+  html[data-skin="glass"]:not([data-theme="light"]) .conv-card,
+  html[data-skin="glass"]:not([data-theme="light"]) .section-group {
+    border-color: rgba(255,255,255,.09);
+    box-shadow: 0 6px 24px rgba(0,0,0,.35);
+  }
+}
 </style>
 </head>
 <body>
@@ -641,20 +809,28 @@ body {
     <img src="https://writer.drakeet.com/images/orca_dark.png" width="28" height="28" style="border-radius:4px" alt="OCAT">
     OCAT++
   </h1>
-  <button class="md-btn md-btn-icon" onclick="toggleTheme()" title="切换深浅色模式" id="themeBtn" style="font-size:18px">🌓</button>
+  <button class="md-btn md-btn-icon" onclick="toggleTheme()" title="切换深浅色模式" id="themeBtn"></button>
+  <button class="md-btn md-btn-icon" onclick="toggleSkin()" title="切换皮肤" id="skinBtn"></button>
+  <select class="md-select" id="zoomSelect" onchange="applyZoom(this.value)" title="界面缩放（大屏幕可调大）" style="height:36px">
+    <option value="1">100%</option>
+    <option value="1.1">110%</option>
+    <option value="1.25">125%</option>
+    <option value="1.5">150%</option>
+    <option value="1.75">175%</option>
+  </select>
   <span class="db-chip" id="dbStatus">未加载</span>
-  <button class="md-btn md-btn-filled" onclick="openDatabase()">📂 选择数据库</button>
-  <button class="md-btn md-btn-tonal" onclick="syncFromPhone()" title="通过 ADB 从手机同步最新数据库">📱 同步手机</button>
+  <button class="md-btn md-btn-filled" onclick="openDatabase()"><span class="mi">folder_open</span>选择数据库</button>
+  <button class="md-btn md-btn-tonal" onclick="syncFromPhone()" title="通过 ADB 从手机同步最新数据库"><span class="mi">sync</span>同步手机</button>
   <span class="stats" id="headerStats"></span>
-  <button class="md-btn md-btn-outlined md-btn-sm" onclick="openImportDialog()" title="从其他数据库导入收藏夹">📥</button>
-  <button class="md-btn md-btn-outlined md-btn-sm" onclick="saveDatabase()" title="保存数据库到文件">💾</button>
-  <button class="md-btn md-btn-outlined md-btn-sm" onclick="clearCache()" title="清除缓存重新解析">🔄</button>
+  <button class="md-btn md-btn-icon md-btn-outlined" onclick="openImportDialog()" title="从其他数据库导入收藏夹"><span class="mi">move_to_inbox</span></button>
+  <button class="md-btn md-btn-icon md-btn-outlined" onclick="saveDatabase()" title="保存数据库到文件"><span class="mi">save</span></button>
+  <button class="md-btn md-btn-icon md-btn-outlined" onclick="clearCache()" title="清除缓存重新解析"><span class="mi">refresh</span></button>
 </div>
 
 <div class="search-bar">
   <div class="search-field">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-    <input type="text" id="searchInput" placeholder="搜索句子、翻译、用户提问、AI回答…" disabled>
+    <span class="mi">search</span>
+    <input type="text" id="searchInput" placeholder="搜索句子、翻译、用户提问、AI回答…（按 / 聚焦）" disabled>
   </div>
   <select class="md-select" id="searchField">
     <option value="all">全部字段</option>
@@ -671,7 +847,14 @@ body {
 </div>
 
 <div class="main">
-  <div class="nav-rail" id="navRail"></div>
+  <div class="nav-rail" id="navRail">
+    <div class="nav-search">
+      <div class="nav-search-field">
+        <span class="mi">search</span>
+        <input type="text" id="navSearch" placeholder="搜索收藏夹" disabled>
+      </div>
+    </div>
+  </div>
   <div class="nav-rail-resizer" id="navResizer"></div>
 
   <div class="content-area">
@@ -682,17 +865,17 @@ body {
         <span class="spacer"></span>
         <button class="md-btn md-btn-outlined md-btn-sm" onclick="toggleSelectAll()" title="全选当前收藏夹的所有句子（跨收藏夹搜索时为全部搜索结果）">全选</button>
         <button class="md-btn md-btn-text md-btn-sm" onclick="deselectAll()" title="清空所有勾选">取消</button>
-        <button class="md-btn md-btn-filled md-btn-sm" id="btnExportAnki" onclick="exportAnki()" disabled>📤 Anki</button>
+        <button class="md-btn md-btn-filled md-btn-sm" id="btnExportAnki" onclick="exportAnki()" disabled><span class="mi">file_download</span>Anki</button>
         <button class="md-btn md-btn-outlined md-btn-sm" id="btnExportCSV" onclick="exportCSV()" disabled>CSV</button>
         <button class="md-btn md-btn-text md-btn-sm" id="btnExportTXT" onclick="exportTXT()" disabled>TXT</button>
       </div>
 
       <div class="filter-chips" id="filterChips" style="display:none">
         <div class="md-chip" id="chipMastered" onclick="toggleFilter('mastered')">
-          <span class="chip-icon">✅</span> 已掌握
+          <span class="mi chip-icon">check_circle</span> 已掌握
         </div>
         <div class="md-chip" id="chipHasTags" onclick="toggleFilter('hasTags')">
-          <span class="chip-icon">🏷️</span> 有标签
+          <span class="mi chip-icon">label</span> 有标签
         </div>
       </div>
 
@@ -700,7 +883,7 @@ body {
 
       <div class="scroll-list" id="convList">
         <div class="empty-state">
-          <div class="icon">📂</div>
+          <div class="icon mi">folder_open</div>
           <div class="title">欢迎使用 OCAT++</div>
           <div class="desc">点击上方「选择数据库」加载 SQLite DB 文件</div>
         </div>
@@ -715,11 +898,11 @@ body {
         <span id="speedLabel" style="font:var(--md-sys-typescale-label-small);min-width:36px">1.25x</span>
         <select id="voiceSelect" onchange="selectedVoiceURI=this.value;store.set('voice',selectedVoiceURI);if(isPlaying&&!window.speechSynthesis.paused){window.speechSynthesis.cancel();speakCurrent();}" style="max-width:140px;height:28px;font-size:11px;border:1px solid var(--md-sys-color-outline);border-radius:4px;background:var(--md-sys-color-surface);color:var(--md-sys-color-on-surface)"><option value="">自动</option></select>
         <div style="flex:1"></div>
-        <button class="md-btn md-btn-text md-btn-sm" onclick="skipPrev()" title="上一句">⏮</button>
-        <button class="md-btn md-btn-text md-btn-sm" id="playBtn" onclick="togglePlay()" title="播放" style="font-size:18px">▶️</button>
-        <button class="md-btn md-btn-text md-btn-sm" onclick="skipNext()" title="下一句">⏭</button>
-        <button class="md-btn md-btn-text md-btn-sm" onclick="stopSpeech()" title="停止">⏹</button>
-        <button class="md-btn md-btn-text md-btn-sm" id="modeBtn" onclick="cycleMode()" title="播放模式">🔁</button>
+        <button class="md-btn" onclick="skipPrev()" title="上一句"><span class="mi">skip_previous</span></button>
+        <button class="md-btn pb-play" id="playBtn" onclick="togglePlay()" title="播放"><span class="mi">play_arrow</span></button>
+        <button class="md-btn" onclick="skipNext()" title="下一句"><span class="mi">skip_next</span></button>
+        <button class="md-btn" onclick="stopSpeech()" title="停止"><span class="mi">stop</span></button>
+        <button class="md-btn" id="modeBtn" onclick="cycleMode()" title="播放模式"><span class="mi">repeat</span></button>
       </div>
     </div>
   </div>
@@ -729,7 +912,7 @@ body {
   <div class="modal-dialog" onclick="event.stopPropagation()">
     <div class="modal-header">
       <h3>对话详情</h3>
-      <button class="modal-close" onclick="closeModal()">✕</button>
+      <button class="modal-close" onclick="closeModal()" title="关闭 (Esc)"><span class="mi">close</span></button>
     </div>
     <div class="modal-body" id="modalBody"></div>
   </div>
@@ -770,7 +953,7 @@ function setDbChip(text, loaded) {
   if (!el) return;
   el.textContent = text + (loaded && dbDirty ? ' · ⚠ 未保存' : '');
   el.className = 'db-chip' + (loaded ? ' loaded' : '');
-  el.title = loaded && dbDirty ? '浏览器内的数据包含尚未写回磁盘文件的更改，请点击 💾 保存' : '';
+  el.title = loaded && dbDirty ? '浏览器内的数据包含尚未写回磁盘文件的更改，请点击右上角保存按钮' : '';
 }
 
 // Configure marked
@@ -793,7 +976,7 @@ async function syncFromPhone() {
       document.getElementById('searchInput').disabled = false;
       await loadAllData();
       cacheData('OCAT.db', false);
-      snackbar('✅ 已从手机同步最新数据库', true);
+      snackbar('已从手机同步最新数据库', true);
       return;
     }
     // 服务器返回了错误信息
@@ -822,7 +1005,7 @@ function showSyncHelp() {
   const cmd = `cmd /c "cd /d ${dir} && python sync_server.py"`;
   document.getElementById('modalBody').innerHTML = `
     <div style="text-align:center;padding:16px">
-      <div style="font-size:48px;margin-bottom:12px">📱</div>
+      <div style="font-size:48px;margin-bottom:12px"><span class="mi" style="font-size:48px">smartphone</span></div>
       <div style="font:var(--md-sys-typescale-title-medium);margin-bottom:8px">同步服务未启动</div>
       <div style="font:var(--md-sys-typescale-body-medium);color:var(--md-sys-color-on-surface-variant);margin-bottom:12px">请在新终端运行以下命令：</div>
       <div style="background:var(--md-sys-color-surface-container);padding:10px 14px;border-radius:8px;font-family:Consolas,monospace;font-size:13px;margin-bottom:12px;text-align:left;user-select:all">${cmd}</div>
@@ -950,7 +1133,7 @@ async function importSelectedCollections(fileName) {
     delete window._importRows;
     dbDirty = true;   // 导入只写进了浏览器内存/缓存，磁盘文件还没更新
     setDbChip(dbFileName || '已加载', true);
-    snackbar(`成功导入 ${imported} 个收藏夹` + (skipped ? `，${skipped} 个已存在跳过` : '') + (imported ? '，记得 💾 保存' : ''), imported > 0);
+    snackbar(`成功导入 ${imported} 个收藏夹` + (skipped ? `，${skipped} 个已存在跳过` : '') + (imported ? '，记得点击保存' : ''), imported > 0);
     // 重新加载数据
     await loadAllData();
     cacheData(dbFileName || 'OCAT.db', true);
@@ -974,7 +1157,7 @@ async function clearCache() {
     db = null; dbDirty = false; DATA = []; currentCollection = null;
     currentSpeechIndex = -1; window.fullPlaylist = []; window._shuffleRecent = [];
     renderNav();
-    document.getElementById('convList').innerHTML = `<div class="empty-state"><div class="icon">📂</div><div class="title">欢迎使用 OCAT++</div><div class="desc">点击上方「选择数据库」加载 SQLite DB 文件</div></div>`;
+    document.getElementById('convList').innerHTML = `<div class="empty-state"><div class="icon mi">folder_open</div><div class="title">欢迎使用 OCAT++</div><div class="desc">点击上方「选择数据库」加载 SQLite DB 文件</div></div>`;
     const oldPager = document.getElementById('paginationBar');
     if (oldPager) oldPager.remove();
     setDbChip('未加载', false);
@@ -1012,13 +1195,15 @@ async function loadDB(buf, name) {
   snackbar('数据库加载成功', true);
 }
 
-// IndexedDB 缓存 — 直接缓存解析后的 DATA
+// IndexedDB 缓存 — 缓存解析后的 DATA + 原始 DB 字节（让缓存会话也支持编辑/保存）
 function cacheData(name, dirty = dbDirty) {
   const req = indexedDB.open('ocat_cache', 1);
   req.onupgradeneeded = () => { req.result.createObjectStore('data'); };
   req.onsuccess = () => {
+    let raw = null;
+    try { raw = db ? db.export() : null; } catch (e) { raw = null; }
     const tx = req.result.transaction('data', 'readwrite');
-    tx.objectStore('data').put({ data: DATA, name, time: Date.now(), dirty: !!dirty }, 'current');
+    tx.objectStore('data').put({ data: DATA, raw, name, time: Date.now(), dirty: !!dirty }, 'current');
     tx.oncomplete = () => req.result.close();
   };
 }
@@ -1054,6 +1239,14 @@ async function loadCachedData() {
   if (cached && cached.data && cached.data.length > 0) {
     DATA = cached.data;
     dbDirty = !!cached.dirty;
+    dbFileName = cached.name || 'OCAT.db';
+    // 用缓存的原始字节重建内存数据库 → 缓存会话同样可以编辑/保存
+    if (cached.raw && typeof initSqlJs !== 'undefined') {
+      try {
+        const SQL = await initSqlJs({ locateFile: f => `vendor/${f}` });
+        db = new SQL.Database(cached.raw);
+      } catch (e) { console.warn('缓存数据库重建失败', e); }
+    }
     document.getElementById('searchInput').disabled = false;
     renderNav();
     const totalC = DATA.reduce((s, c) => s + allConvs(c).length, 0);
@@ -1154,17 +1347,30 @@ function allConvs(col) {
 // ============================================================
 function renderNav() {
   const nav = document.getElementById('navRail');
-  nav.innerHTML = DATA.map((col, i) => {
+  const search = document.getElementById('navSearch');
+  if (search && DATA.length) search.disabled = false;
+  nav.querySelectorAll('.nav-rail-item').forEach(el => el.remove());
+  const itemsHTML = DATA.map((col, i) => {
     const totalS = allConvs(col).reduce((t, c) => t + c.sentences.length, 0);
     const langLabel = col.lang === 'ja' ? '日' : col.lang === 'en' ? '英' : col.lang === 'zh' ? '中' : '';
     const langColors = { ja: '#e74c3c', en: '#3498db', zh: '#e67e22' };
-    const langBg = langColors[col.lang] || '#999';
-    return `<div class="nav-rail-item" data-idx="${i}" onclick="selectCollection(${i})" title="${escHtml(col.title)} (${totalS} 句)">
-      <span class="nav-icon" style="width:32px;height:32px;border-radius:50%;background:${langBg};color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;flex-shrink:0">${langLabel || '📁'}</span>
+    const langBg = langColors[col.lang] || '#8e9099';
+    return `<div class="nav-rail-item" data-idx="${i}" data-title="${escAttr(col.title)}" title="${escAttr(col.title)} (${totalS} 句)">
+      <span class="nav-icon" style="width:32px;height:32px;border-radius:50%;background:${langBg};color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;flex-shrink:0">${langLabel || '<span class="mi" style="font-size:16px">folder</span>'}</span>
       <span class="nav-label">${escHtml(col.title)}</span>
       ${totalS > 99 ? `<span class="nav-badge">${totalS > 999 ? '999+' : totalS}</span>` : ''}
     </div>`;
   }).join('');
+  nav.insertAdjacentHTML('beforeend', itemsHTML);
+  if (search && search.value.trim()) filterNavCollections(search.value);
+}
+
+// 按关键字过滤导航栏收藏夹
+function filterNavCollections(kw) {
+  const q = (kw || '').toLowerCase().trim();
+  document.querySelectorAll('#navRail .nav-rail-item').forEach(el => {
+    el.style.display = !q || (el.dataset.title || '').toLowerCase().includes(q) ? '' : 'none';
+  });
 }
 
 function selectCollection(idx) {
@@ -1256,7 +1462,7 @@ function crossSearch(keyword) {
 
   document.getElementById('sectionNav').style.display = 'none';
   document.getElementById('filterChips').style.display = 'none';
-  document.getElementById('toolbarTitle').textContent = `🔍 跨收藏夹搜索`;
+  document.getElementById('toolbarTitle').textContent = `跨收藏夹搜索`;
   document.getElementById('toolbarCount').textContent = `${results.length} 个对话`;
   document.getElementById('searchHint').textContent = `在 ${DATA.length} 个收藏夹中找到 ${results.reduce((s, r) => s + r.conv.sentences.length, 0)} 条句子`;
   window._searchResults = results;
@@ -1268,7 +1474,7 @@ function crossSearch(keyword) {
     buildFullPlaylist();
     const oldPager0 = document.getElementById('paginationBar');
     if (oldPager0) oldPager0.remove();
-    container.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><div class="title">没有匹配的结果</div></div>`;
+    container.innerHTML = `<div class="empty-state"><div class="icon mi">search</div><div class="title">没有匹配的结果</div></div>`;
     return;
   }
 
@@ -1354,7 +1560,7 @@ function renderConversations(convs) {
     buildFullPlaylist();
     const oldPager = document.getElementById('paginationBar');
     if (oldPager) oldPager.remove();
-    container.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><div class="title">没有匹配的结果</div></div>`;
+    container.innerHTML = `<div class="empty-state"><div class="icon mi">search</div><div class="title">没有匹配的结果</div></div>`;
     return;
   }
   _renderPageAt(convs.map(c => ({ conv: c })), container, (item) => renderConvItem(item.conv), currentPage);
@@ -1371,8 +1577,10 @@ function buildSectionFlatItems(sections) {
     flatItems.push({
       type: 'section',
       html: `<div class="section-group ${isCollapsed ? 'collapsed' : ''}" id="${secId}">
-        <div class="section-group-header" onclick="toggleSection('${secId}')">
-          <span class="section-arrow">▼</span> 📌 ${escHtml(sec.title || '(未分类)')}
+        <div class="section-group-header">
+          <span class="section-arrow"><span class="mi" style="font-size:14px">expand_more</span></span>
+          <span class="mi" style="font-size:16px;color:var(--md-sys-color-primary)">folder</span>
+          ${escHtml(sec.title || '(未分类)')}
           <span class="section-count">${convCount} 对话 · ${senCount} 句</span>
         </div>
         <div class="section-group-body">`
@@ -1391,13 +1599,13 @@ function renderSections(sections) {
     buildFullPlaylist();
     const oldPager = document.getElementById('paginationBar');
     if (oldPager) oldPager.remove();
-    container.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><div class="title">没有匹配的结果</div></div>`;
+    container.innerHTML = `<div class="empty-state"><div class="icon mi">search</div><div class="title">没有匹配的结果</div></div>`;
     navContainer.style.display = 'none';
     return;
   }
   navContainer.style.display = 'flex';
   navContainer.innerHTML = sections.map((sec, si) =>
-    `<span class="nav-chip ${si === activeSectionIdx ? 'active' : ''}" onclick="scrollToSection('sec-${si}')">${escHtml(sec.title || '(未分类)')}</span>`
+    `<span class="nav-chip ${si === activeSectionIdx ? 'active' : ''}" data-sec="sec-${si}">${escHtml(sec.title || '(未分类)')}</span>`
   ).join('');
 
   const flatItems = buildSectionFlatItems(sections);
@@ -1426,53 +1634,74 @@ function _renderPageAt(items, container, renderer, page) {
     const pager = document.createElement('div');
     pager.id = 'paginationBar';
     pager.style.cssText = 'background:var(--md-sys-color-surface);border-top:1px solid var(--md-sys-color-outline-variant);padding:8px 16px;display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;flex-shrink:0';
-    pager.innerHTML = _buildPagerHTML(page, totalPages, items, renderer);
+    pager.innerHTML = _buildPagerHTML(page, totalPages);
     container.parentElement.appendChild(pager);
+    const sizeSel = pager.querySelector('#pageSizeSelect');
+    if (sizeSel) sizeSel.onchange = () => {
+      PAGE_SIZE = parseInt(sizeSel.value, 10);
+      store.set('pagesize', PAGE_SIZE);
+      buildFullPlaylist();
+      goToPage(1);
+      if (isPlaying) highlightCurrentSentence();
+    };
+    const jump = pager.querySelector('#pageJump');
+    if (jump) jump.onkeydown = (e) => {
+      if (e.key === 'Enter') goToPage(parseInt(jump.value, 10) || page);
+    };
   }
 }
 
-function _buildPagerHTML(page, totalPages, items, renderer) {
+// 跳转到指定页（自动夹紧范围）
+function goToPage(p) {
+  const items = window.currentRenderItems;
+  if (!items || !items.length) return;
+  const totalPages = Math.ceil(items.length / PAGE_SIZE) || 1;
+  p = Math.max(1, Math.min(totalPages, parseInt(p, 10) || 1));
+  const pager = document.getElementById('paginationBar');
+  if (pager) pager.remove();
+  _renderPageAt(items, document.getElementById('convList'), window.currentRenderer, p);
+}
+
+function _buildPagerHTML(page, totalPages) {
   let html = '';
 
   // 每页条数选择
-  html += `<select class="md-select" style="height:28px;font-size:12px" id="pageSizeSelect" onchange="
-    PAGE_SIZE=parseInt(this.value);
-    store.set('pagesize',PAGE_SIZE);
-    _renderPageAt(currentRenderItems,document.getElementById('convList'),currentRenderer,1);
-    buildFullPlaylist();
-    if(isPlaying)highlightCurrentSentence();
-  ">
+  html += `<select class="md-select" style="height:28px;font-size:12px" id="pageSizeSelect" title="每页条数">
     ${[25,50,100,200].map(n => `<option value="${n}" ${PAGE_SIZE===n?'selected':''}>${n}条/页</option>`).join('')}
   </select>`;
 
-  // 页码
+  // 上一页
+  html += `<span class="pager-btn ${page <= 1 ? 'disabled' : ''}" data-page="${page - 1}" title="上一页"><span class="mi" style="font-size:18px">chevron_left</span></span>`;
+
+  // 页码（B站风格窗口）
   const pages = _getPageRange(page, totalPages);
   pages.forEach(p => {
-    if (p === '...') {
-      html += '<span style="padding:4px 8px;color:var(--md-sys-color-on-surface-variant)">…</span>';
-    } else {
-      html += `<span class="md-chip ${p === page ? 'selected' : ''}" style="cursor:pointer;min-width:32px;justify-content:center;font-size:12px"
-        onclick="document.getElementById('paginationBar').remove();_renderPageAt(currentRenderItems,document.getElementById('convList'),currentRenderer,${p})">${p}</span>`;
-    }
+    if (p === '...') html += '<span class="pager-ellipsis">…</span>';
+    else html += `<span class="pager-btn ${p === page ? 'active' : ''}" data-page="${p}">${p}</span>`;
   });
 
+  // 下一页
+  html += `<span class="pager-btn ${page >= totalPages ? 'disabled' : ''}" data-page="${page + 1}" title="下一页"><span class="mi" style="font-size:18px">chevron_right</span></span>`;
+
   // 跳转
-  html += `<input type="number" min="1" max="${totalPages}" placeholder="${page}/${totalPages}"
+  html += `<input type="number" min="1" max="${totalPages}" id="pageJump" placeholder="${page}/${totalPages}"
     style="width:60px;height:28px;border:1px solid var(--md-sys-color-outline);border-radius:6px;text-align:center;font-size:12px"
-    onkeydown="if(event.key==='Enter'){const v=parseInt(this.value);if(v>=1&&v<=${totalPages}){document.getElementById('paginationBar').remove();_renderPageAt(currentRenderItems,document.getElementById('convList'),currentRenderer,v)}}">`;
+    title="输入页码后回车跳转">`;
 
   return html;
 }
 
+// B站风格：固定 7 个页码的滑动窗口（当前页尽量居中），首页/末页常驻，其余以省略号收拢
 function _getPageRange(page, total) {
   if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  const range = [];
-  range.push(1);
-  if (page > 3) range.push('...');
-  for (let i = Math.max(2, page - 1); i <= Math.min(total - 1, page + 1); i++) range.push(i);
-  if (page < total - 2) range.push('...');
-  range.push(total);
-  return range;
+  let start = Math.max(1, page - 3);
+  let end = Math.min(total, start + 6);
+  start = Math.max(1, end - 6);
+  const pages = [];
+  if (start > 1) { pages.push(1); if (start > 2) pages.push('...'); }
+  for (let i = start; i <= end; i++) pages.push(i);
+  if (end < total) { if (end < total - 1) pages.push('...'); pages.push(total); }
+  return pages;
 }
 
 function stripMarkdown(text) {
@@ -1498,27 +1727,25 @@ function renderConvItem(conv, collection) {
   const sentencesHtml = conv.sentences.filter(s => s.type !== 'section').map(s => {
     const isSenSelected = selectedSentences.has(s.id);
     const tags = [];
-    if (s.isMastered) tags.push('<span class="sen-tag mastered">✓ 已掌握</span>');
     if (s.tags) tags.push(`<span class="sen-tag">${escHtml(s.tags)}</span>`);
-    return `<div class="sentence-row" data-sid="${escAttr(s.id)}" data-lang="${escAttr(s.lang || 'ja')}" onclick="onRowClick(event)">
-      <input type="checkbox" class="md-checkbox" ${isSenSelected ? 'checked' : ''}
-        onchange="toggleSentence('${s.id}', this.checked)" onclick="event.stopPropagation()">
+    return `<div class="sentence-row" data-sid="${escAttr(s.id)}" data-lang="${escAttr(s.lang || 'ja')}">
+      <input type="checkbox" class="md-checkbox" ${isSenSelected ? 'checked' : ''} title="勾选导出">
       <div class="sen-content">
         <div class="sen-ja">${renderContentWithRuby(s.content, s.ruby)}</div>
         <div class="sen-zh">${escHtml(s.translation)}</div>
         <div class="sen-tags">${tags.join('')}</div>
       </div>
-      <span class="sen-lookup" title="分词查词典" onclick="event.stopPropagation();lookupFromRow(event)">📖</span>
-      <span class="sen-lookup" title="只读这一句" onclick="event.stopPropagation();speakOnceFromRow(event)">🔊</span>
+      <span class="sen-lookup sen-mastered ${s.isMastered ? 'on' : ''}" data-act="mastered" title="${s.isMastered ? '取消已掌握' : '标记为已掌握'}"><span class="mi">${s.isMastered ? 'check_circle' : 'radio_button_unchecked'}</span></span>
+      <span class="sen-lookup" data-act="lookup" title="分词查词典"><span class="mi">menu_book</span></span>
+      <span class="sen-lookup" data-act="speak" title="只读这一句"><span class="mi">volume_up</span></span>
     </div>`;
   }).join('');
 
-  const colBadge = collection ? `<div class="collection-badge">📁 ${escHtml(collection.title)}</div>` : '';
+  const colBadge = collection ? `<div class="collection-badge"><span class="mi" style="font-size:12px">folder</span> ${escHtml(collection.title)}</div>` : '';
 
   return `<div class="conv-card ${isExpanded ? 'expanded' : ''} ${isSelected ? 'selected' : ''}" data-msg-id="${escAttr(conv.messageId)}" style="animation-delay:0ms">
-    <div class="conv-card-header" onclick="toggleConv('${conv.messageId}')">
-      <input type="checkbox" class="md-checkbox" ${isSelected ? 'checked' : ''}
-        onchange="toggleConvSelect('${conv.messageId}', this.checked)" onclick="event.stopPropagation()">
+    <div class="conv-card-header">
+      <input type="checkbox" class="md-checkbox" ${isSelected ? 'checked' : ''} title="勾选导出">
       <div class="conv-card-body">
         ${colBadge}
         <div class="conv-question">${escHtml(q)}</div>
@@ -1528,9 +1755,9 @@ function renderConvItem(conv, collection) {
           ${modelShort ? `<span class="sen-tag">${escHtml(modelShort)}</span>` : ''}
         </div>
       </div>
-      <div class="conv-card-actions" onclick="event.stopPropagation()">
-        <button class="md-btn md-btn-text md-btn-sm" onclick="viewConversation('${conv.messageId}')">📄 原文</button>
-        <button class="md-btn md-btn-text md-btn-sm" onclick="exportConvAnki('${conv.messageId}')">📤</button>
+      <div class="conv-card-actions">
+        <button class="md-btn md-btn-text md-btn-sm" data-act="view" title="查看对话原文"><span class="mi">article</span>原文</button>
+        <button class="md-btn md-btn-text md-btn-sm" data-act="exportconv" title="导出该对话为 Anki CSV"><span class="mi">file_download</span></button>
       </div>
     </div>
     <div class="conv-sentences"><div class="conv-sentences-inner">${sentencesHtml}</div></div>
@@ -1662,7 +1889,7 @@ function updateToolbar() {
   ['btnExportAnki', 'btnExportCSV', 'btnExportTXT'].forEach(id => {
     document.getElementById(id).disabled = total === 0;
   });
-  document.getElementById('btnExportAnki').textContent = total > 0 ? `📤 Anki (${total})` : '📤 Anki';
+  document.getElementById('btnExportAnki').innerHTML = total > 0 ? `<span class="mi">file_download</span>Anki (${total})` : '<span class="mi">file_download</span>Anki';
 }
 
 // ============================================================
@@ -1691,7 +1918,7 @@ function viewConversation(msgId) {
     <div class="md-content">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <div class="label" style="font:var(--md-sys-typescale-label-small);opacity:.7">🤖 AI 回复</div>
-        <button class="md-btn md-btn-text md-btn-sm" onclick="copyConvText()">📋 复制全文</button>
+        <button class="md-btn md-btn-text md-btn-sm" onclick="copyConvText()"><span class="mi">content_copy</span>复制全文</button>
       </div>
       ${mdHtml}
     </div>`;
@@ -1717,7 +1944,14 @@ async function copyConvText() {
 
 function closeModal(e) {
   if (e && e.target !== document.getElementById('modalOverlay')) return;
-  document.getElementById('modalOverlay').style.display = 'none';
+  const scrim = document.getElementById('modalOverlay');
+  if (scrim.style.display === 'none') return;
+  // 退出动画后再隐藏
+  scrim.classList.add('closing');
+  setTimeout(() => {
+    scrim.style.display = 'none';
+    scrim.classList.remove('closing');
+  }, 170);
 }
 
 // ============================================================
@@ -1900,8 +2134,9 @@ function playlistIndexOfRow(row) {
   return item ? list.indexOf(item) : -1;
 }
 
-// 点击句子文字：停止状态 → 从这句开始连播；播放中 → 跳到这句
+// 点击句子文字：仅播放中生效（跳到这句）；停止时不动作，方便划选取词
 function onRowClick(e) {
+  if (!isPlaying) return;
   const sel = window.getSelection();
   if (sel && sel.toString().trim()) return;   // 正在划选文字 → 交给查词弹窗
   const row = e.target.closest('.sentence-row');
@@ -1909,7 +2144,6 @@ function onRowClick(e) {
   const idx = playlistIndexOfRow(row);
   if (idx < 0) return;
   currentSpeechIndex = idx;
-  if (!isPlaying) { isPlaying = true; updatePlayBtn(); }
   speakCurrent();
 }
 
@@ -1998,9 +2232,9 @@ function highlightCurrentSentence(clear) {
 }
 
 function cleanRubyText(el) {
-  // 移除 ruby 注音，只保留正文
+  // 移除注音（原生 ruby rt 与自定义 .rt），只保留正文
   const clone = el.cloneNode(true);
-  clone.querySelectorAll('rt').forEach(rt => rt.remove());
+  clone.querySelectorAll('rt, .rt').forEach(rt => rt.remove());
   return clone.textContent.replace(/[\s\n]+/g, ' ').trim();
 }
 
@@ -2049,9 +2283,9 @@ function stopSpeech() {
 function updatePlayBtn() {
   const btn = document.getElementById('playBtn');
   if (btn) {
-    if (window.speechSynthesis.paused) { btn.innerHTML = '▶️'; btn.title = '继续'; }
-    else if (isPlaying) { btn.innerHTML = '⏸️'; btn.title = '暂停'; }
-    else { btn.innerHTML = '▶️'; btn.title = '播放'; }
+    if (window.speechSynthesis.paused) { btn.innerHTML = '<span class="mi">play_arrow</span>'; btn.title = '继续'; }
+    else if (isPlaying) { btn.innerHTML = '<span class="mi">pause</span>'; btn.title = '暂停'; }
+    else { btn.innerHTML = '<span class="mi">play_arrow</span>'; btn.title = '播放'; }
   }
 }
 
@@ -2061,7 +2295,7 @@ function cycleMode() {
   window._shuffleRecent = [];
   store.set('mode', speechMode);
   const btn = document.getElementById('modeBtn');
-  btn.innerHTML = speechMode === 'loop' ? '🔁' : '🔀';
+  btn.innerHTML = speechMode === 'loop' ? '<span class="mi">repeat</span>' : '<span class="mi">shuffle</span>';
   btn.title = speechMode === 'loop' ? '列表循环' : '随机播放（跨页、不重复）';
 }
 
@@ -2074,7 +2308,7 @@ function cycleMode() {
   }
   const btn = document.getElementById('modeBtn');
   if (btn) {
-    btn.innerHTML = speechMode === 'loop' ? '🔁' : '🔀';
+    btn.innerHTML = speechMode === 'loop' ? '<span class="mi">repeat</span>' : '<span class="mi">shuffle</span>';
     btn.title = speechMode === 'loop' ? '列表循环' : '随机播放（跨页、不重复）';
   }
   updateVoiceSelector();
@@ -2084,7 +2318,7 @@ function cycleMode() {
 (function() {
   const btn = document.createElement('button');
   btn.id = 'backToTopBtn';
-  btn.innerHTML = '⬆';
+  btn.innerHTML = '<span class="mi">arrow_upward</span>';
   btn.title = '回到顶部';
   btn.style.cssText = 'position:fixed;bottom:80px;right:24px;width:40px;height:40px;border-radius:50%;border:none;background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container);font-size:18px;cursor:pointer;z-index:50;box-shadow:var(--md-sys-elevation-2);opacity:0;transition:opacity .3s;pointer-events:none';
   btn.onclick = () => document.getElementById('convList').scrollTo({ top: 0, behavior: 'smooth' });
@@ -2148,8 +2382,8 @@ async function lookupJapanese(sentence) {
         <span style="font-family:var(--font-ja);font-size:16px;flex:1">
           ${escHtml(word)}${base ? ` <span style="font-size:12px;color:var(--md-sys-color-on-surface-variant)">← ${escHtml(base)}</span>` : ''}
         </span>
-        <a href="https://jisho.org/search/${base ? baseEnc : enc}" target="_blank" class="md-btn md-btn-text md-btn-sm" style="font-size:11px">📖 Jisho</a>
-        <a href="http://www.gavo.t.u-tokyo.ac.jp/ojad/search/index/word:${base ? baseEnc : enc}" target="_blank" class="md-btn md-btn-text md-btn-sm" style="font-size:11px">🔊 OJAD</a>
+        <a href="https://jisho.org/search/${base ? baseEnc : enc}" target="_blank" class="md-btn md-btn-text md-btn-sm" style="font-size:11px"><span class="mi" style="font-size:14px">menu_book</span>Jisho</a>
+        <a href="http://www.gavo.t.u-tokyo.ac.jp/ojad/search/index/word:${base ? baseEnc : enc}" target="_blank" class="md-btn md-btn-text md-btn-sm" style="font-size:11px"><span class="mi" style="font-size:14px">graphic_eq</span>OJAD</a>
       </div>`;
     }).join('')}
     <div style="margin-top:12px;font:var(--md-sys-typescale-label-small);color:var(--md-sys-color-on-surface-variant)">
@@ -2170,25 +2404,48 @@ function lookupEnglish(sentence) {
       const enc = encodeURIComponent(w);
       return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--md-sys-color-outline-variant)">
         <span style="font-size:16px;flex:1">${escHtml(w)}</span>
-        <a href="https://www.merriam-webster.com/dictionary/${enc}" target="_blank" class="md-btn md-btn-text md-btn-sm" style="font-size:11px">📖 MW</a>
-        <a href="https://dictionary.cambridge.org/dictionary/english/${enc}" target="_blank" class="md-btn md-btn-text md-btn-sm" style="font-size:11px">🔤 剑桥</a>
-        <a href="https://youglish.com/pronounce/${enc}/english" target="_blank" class="md-btn md-btn-text md-btn-sm" style="font-size:11px">🔊 YouGlish</a>
+        <a href="https://www.merriam-webster.com/dictionary/${enc}" target="_blank" class="md-btn md-btn-text md-btn-sm" style="font-size:11px"><span class="mi" style="font-size:14px">menu_book</span>MW</a>
+        <a href="https://dictionary.cambridge.org/dictionary/english/${enc}" target="_blank" class="md-btn md-btn-text md-btn-sm" style="font-size:11px"><span class="mi" style="font-size:14px">translate</span>剑桥</a>
+        <a href="https://youglish.com/pronounce/${enc}/english" target="_blank" class="md-btn md-btn-text md-btn-sm" style="font-size:11px"><span class="mi" style="font-size:14px">graphic_eq</span>YouGlish</a>
       </div>`;
     }).join('')}`;
   document.getElementById('modalOverlay').style.display = 'flex';
 }
 
-// 文字划选快捷查询
-let popupJustClosed = false;
-document.addEventListener('mouseup', function(e) {
-  if (popupJustClosed) { popupJustClosed = false; return; }
-  const sel = window.getSelection();
-  const text = sel.toString().trim();
-  if (!text || text.length > 30) return;
-  const senRow = e.target.closest('.sentence-row') || e.target.closest('#modalBody');
-  if (!senRow) return;
+// 文字划选快捷查询（状态机：修复「取消选中后弹框又出现」）
+let _selPopup = null;
+let _suppressPopup = false;
+let _closedSelText = '';
 
-  document.querySelectorAll('.pitch-popup').forEach(el => el.remove());
+function closeSelPopup() {
+  if (_selPopup) { _selPopup.remove(); _selPopup = null; }
+}
+
+document.addEventListener('mousedown', (e) => {
+  if (_selPopup) {
+    if (!_selPopup.contains(e.target)) {
+      _closedSelText = (window.getSelection() ? window.getSelection().toString() : '').trim();
+      closeSelPopup();
+      // 这次点击既关掉了弹窗，也可能折叠了旧选区：本次 mouseup 不再弹
+      _suppressPopup = true;
+    }
+  } else {
+    _suppressPopup = false;   // 全新的一次交互
+  }
+});
+
+document.addEventListener('mouseup', function(e) {
+  const zone = e.target.closest && (e.target.closest('.sentence-row') || e.target.closest('#modalBody'));
+  if (!zone) return;
+  const sel = window.getSelection();
+  const text = sel ? sel.toString().trim() : '';
+  if (!text || text.length > 30) return;      // 无选区（含已取消选中）
+  if (_suppressPopup) {
+    _suppressPopup = false;
+    if (text === _closedSelText) return;      // 仍是刚被关闭时的旧选区 → 不弹
+  }
+
+  closeSelPopup();
   const enc = encodeURIComponent(text);
   const isJapanese = /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]/.test(text);
 
@@ -2197,33 +2454,24 @@ document.addEventListener('mouseup', function(e) {
   if (isJapanese) {
     popup.innerHTML = `
       <div class="popup-word">${escHtml(text)}</div>
-      <a href="https://jisho.org/search/${enc}" target="_blank" rel="noopener">📖 Jisho 词典</a>
-      <a href="http://www.gavo.t.u-tokyo.ac.jp/ojad/search/index/word:${enc}" target="_blank" rel="noopener">🔊 OJAD 音调</a>`;
+      <a href="https://jisho.org/search/${enc}" target="_blank" rel="noopener"><span class="mi" style="font-size:16px">menu_book</span>Jisho 词典</a>
+      <a href="http://www.gavo.t.u-tokyo.ac.jp/ojad/search/index/word:${enc}" target="_blank" rel="noopener"><span class="mi" style="font-size:16px">graphic_eq</span>OJAD 音调</a>`;
   } else {
     popup.innerHTML = `
       <div class="popup-word">${escHtml(text)}</div>
-      <a href="https://www.merriam-webster.com/dictionary/${enc}" target="_blank" rel="noopener">📖 Merriam-Webster</a>
-      <a href="https://dictionary.cambridge.org/dictionary/english/${enc}" target="_blank" rel="noopener">🔤 Cambridge</a>
-      <a href="https://youglish.com/pronounce/${enc}/english" target="_blank" rel="noopener">🔊 YouGlish</a>`;
+      <a href="https://www.merriam-webster.com/dictionary/${enc}" target="_blank" rel="noopener"><span class="mi" style="font-size:16px">menu_book</span>Merriam-Webster</a>
+      <a href="https://dictionary.cambridge.org/dictionary/english/${enc}" target="_blank" rel="noopener"><span class="mi" style="font-size:16px">translate</span>Cambridge</a>
+      <a href="https://youglish.com/pronounce/${enc}/english" target="_blank" rel="noopener"><span class="mi" style="font-size:16px">graphic_eq</span>YouGlish</a>`;
   }
-  // 检查是否在弹窗内
-  const inModal = !!e.target.closest('#modalBody');
-  if (inModal) {
-    popup.style.position = 'fixed';
-  }
+  if (e.target.closest('#modalBody')) popup.style.position = 'fixed';
   popup.style.top = Math.min(e.clientY + 8, window.innerHeight - 180) + 'px';
   popup.style.left = Math.min(e.clientX, window.innerWidth - 220) + 'px';
   document.body.appendChild(popup);
-  // 点击外部关闭
-  const closeOnClick = (ev) => {
-    if (!popup.contains(ev.target)) {
-      popup.remove();
-      popupJustClosed = true;
-      document.removeEventListener('mousedown', closeOnClick);
-    }
-  };
-  setTimeout(() => document.addEventListener('mousedown', closeOnClick), 0);
+  _selPopup = popup;
 });
+
+// 滚动列表时关闭悬浮弹窗
+document.getElementById('convList').addEventListener('scroll', closeSelPopup);
 
 // ============================================================
 // Utilities
@@ -2233,10 +2481,10 @@ function rubyToBrackets(html) {
   return html.replace(/<ruby[^>]*>(.*?)<rt>(.*?)<\/rt><\/ruby>/g, '$1[$2]').replace(/<[^>]+>/g, '').trim();
 }
 
-// 将 漢字[かんじ] 格式转为 HTML ruby 标签用于显示
+// 将 漢字[かんじ] 格式转为自定义注音标记（rt 绝对定位悬浮，不错位）
 function bracketsToRuby(text) {
   if (!text) return '';
-  return text.replace(/([^\]]+?)\[([^\]]+)\]/g, '<ruby>$1<rt>$2</rt></ruby>');
+  return text.replace(/([^\]]+?)\[([^\]]+)\]/g, '<span class="rb">$1<span class="rt">$2</span></span>');
 }
 
 // 为句子生成带注音的 HTML
@@ -2312,6 +2560,96 @@ document.getElementById('searchInput').addEventListener('input', debounce(onSear
 document.getElementById('searchField').addEventListener('change', onSearch);
 document.getElementById('searchScope').addEventListener('change', onSearch);
 
+// ===== 列表事件委托（整表只挂少量监听器，替代行内 onclick）=====
+(function setupDelegation() {
+  const convList = document.getElementById('convList');
+  convList.addEventListener('click', (e) => {
+    const actEl = e.target.closest('[data-act]');
+    if (actEl) {
+      const act = actEl.dataset.act;
+      if (act === 'lookup') return lookupFromRow(e);
+      if (act === 'speak') return speakOnceFromRow(e);
+      if (act === 'mastered') {
+        const row = actEl.closest('.sentence-row');
+        if (row) toggleMastered(row.dataset.sid);
+        return;
+      }
+      const card = actEl.closest('.conv-card');
+      if (act === 'view' && card) return viewConversation(card.dataset.msgId);
+      if (act === 'exportconv' && card) return exportConvAnki(card.dataset.msgId);
+      return;
+    }
+    if (e.target.closest('input[type=checkbox]')) return;   // 勾选由 change 事件处理
+    const secHead = e.target.closest('.section-group-header');
+    if (secHead) { toggleSection(secHead.parentElement.id); return; }
+    const header = e.target.closest('.conv-card-header');
+    if (header) { toggleConv(header.closest('.conv-card').dataset.msgId); return; }
+    const row = e.target.closest('.sentence-row');
+    if (row) onRowClick(e);
+  });
+  convList.addEventListener('change', (e) => {
+    const cb = e.target;
+    if (cb.type !== 'checkbox') return;
+    const senRow = cb.closest('.sentence-row');
+    if (senRow) { toggleSentence(senRow.dataset.sid, cb.checked); return; }
+    const header = cb.closest('.conv-card-header');
+    if (header) toggleConvSelect(header.closest('.conv-card').dataset.msgId, cb.checked);
+  });
+  // 导航栏收藏夹
+  document.getElementById('navRail').addEventListener('click', (e) => {
+    const item = e.target.closest('.nav-rail-item');
+    if (item) selectCollection(parseInt(item.dataset.idx, 10));
+  });
+  // 分栏快速跳转
+  document.getElementById('sectionNav').addEventListener('click', (e) => {
+    const chip = e.target.closest('.nav-chip');
+    if (chip && chip.dataset.sec) scrollToSection(chip.dataset.sec);
+  });
+  // 分页按钮
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('#paginationBar [data-page]');
+    if (btn) goToPage(btn.dataset.page);
+  });
+  // 收藏夹搜索
+  const navSearch = document.getElementById('navSearch');
+  navSearch.addEventListener('input', debounce(() => filterNavCollections(navSearch.value), 120));
+  navSearch.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { navSearch.value = ''; filterNavCollections(''); navSearch.blur(); }
+  });
+})();
+
+// ===== 标记已掌握（写回内存数据库，💾 保存后持久化到文件）=====
+let _masteredCacheTimer = null;
+function toggleMastered(sid) {
+  if (!db) { snackbar('请先加载数据库'); return; }
+  let item = null;
+  outer:
+  for (const col of DATA) {
+    for (const conv of allConvs(col)) {
+      for (const s of conv.sentences) {
+        if (String(s.id) === String(sid)) { item = s; break outer; }
+      }
+    }
+  }
+  if (!item) return;
+  const newVal = item.isMastered ? 0 : 1;
+  try {
+    db.run('UPDATE Collection SET isMastered = ? WHERE id = ?', [newVal, item.id]);
+  } catch (err) { snackbar('写入失败: ' + err.message); return; }
+  item.isMastered = !!newVal;
+  document.querySelectorAll(`#convList .sentence-row[data-sid="${CSS.escape(String(sid))}"] .sen-lookup[data-act="mastered"]`).forEach(btn => {
+    btn.classList.toggle('on', !!newVal);
+    btn.title = newVal ? '取消已掌握' : '标记为已掌握';
+    btn.querySelector('.mi').textContent = newVal ? 'check_circle' : 'radio_button_unchecked';
+  });
+  dbDirty = true;
+  setDbChip(dbFileName || '已加载', true);
+  snackbar(newVal ? '已标记为已掌握，记得点击保存' : '已取消掌握', true);
+  // 防抖写缓存：刷新后「未保存」状态与勾选结果都能恢复
+  clearTimeout(_masteredCacheTimer);
+  _masteredCacheTimer = setTimeout(() => cacheData(dbFileName || 'OCAT.db', true), 3000);
+}
+
 // Sidebar resize
 (function() {
   const rail = document.getElementById('navRail');
@@ -2359,10 +2697,57 @@ function toggleTheme() {
 function updateThemeIcon() {
   const t = document.documentElement.getAttribute('data-theme');
   const btn = document.getElementById('themeBtn');
-  if (btn) btn.textContent = t === 'dark' ? '☀️' : t === 'light' ? '🌙' : '🌓';
+  if (btn) {
+    btn.innerHTML = t === 'dark' ? '<span class="mi">light_mode</span>'
+      : t === 'light' ? '<span class="mi">dark_mode</span>'
+      : '<span class="mi">brightness_auto</span>';
+    btn.title = t === 'dark' ? '深色模式（点击切换）' : t === 'light' ? '浅色模式（点击恢复跟随系统）' : '跟随系统（点击切换）';
+  }
 }
 
+// ===== 皮肤切换（Material / 液态玻璃）=====
+function toggleSkin() {
+  const isGlass = document.documentElement.getAttribute('data-skin') === 'glass';
+  if (isGlass) document.documentElement.removeAttribute('data-skin');
+  else document.documentElement.setAttribute('data-skin', 'glass');
+  store.set('skin', isGlass ? 'material' : 'glass');
+  updateSkinIcon();
+  snackbar(isGlass ? '已切换到 Material 风格' : '已切换到液态玻璃风格', true);
+}
+function updateSkinIcon() {
+  const btn = document.getElementById('skinBtn');
+  if (!btn) return;
+  const isGlass = document.documentElement.getAttribute('data-skin') === 'glass';
+  btn.innerHTML = isGlass ? '<span class="mi">blur_on</span>' : '<span class="mi">layers</span>';
+  btn.title = isGlass ? '当前：液态玻璃（点击切换到 Material）' : '当前：Material（点击切换到液态玻璃）';
+}
+
+// ===== 界面缩放（4K 大屏适配）=====
+function applyZoom(z) {
+  const v = parseFloat(z) || 1;
+  document.documentElement.style.zoom = v === 1 ? '' : String(v);
+  store.set('zoom', String(v));
+  // zoom 会等比放大 100vh 定高的内容，需要等比缩小才能恰好占满视口
+  document.body.style.height = v === 1 ? '' : (100 / v) + 'vh';
+  const sel = document.getElementById('zoomSelect');
+  if (sel && sel.value !== String(v)) sel.value = String(v);
+}
+(function initZoom() {
+  const sel = document.getElementById('zoomSelect');
+  const cur = document.documentElement.style.zoom || '1';
+  if (sel) {
+    if (![...sel.options].some(o => o.value === cur)) {
+      // 无匹配档位时以 100% 显示（缩放值仍保留）
+      sel.value = '1';
+    } else sel.value = cur;
+  }
+  // 补偿 vh（head 早期应用时 body 可能还没就绪，这里统一处理）
+  const v = parseFloat(cur) || 1;
+  if (v !== 1) document.body.style.height = (100 / v) + 'vh';
+})();
+
 updateThemeIcon();
+updateSkinIcon();
 </script>
 </body>
 </html>
