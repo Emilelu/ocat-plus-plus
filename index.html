@@ -2489,6 +2489,8 @@ const KANJI_RE = /[\u3400-\u4dbf\u4e00-\u9fff々]/;
 
 // 把读音按比例分配到 base 的每个汉字：返回 [{char, rt}]
 // ① 先剪掉 base 首尾与读音重复的假名（お金[おかね]→金←かね、喋れる[しゃべれる]→喋←しゃべ+れる）
+//    剪法取「最长匹配」：正则粘连时 base 可能带上前面的助词（をでっち上げ[でっちあげ]），
+//    全量比较会失败，逐长度回退才能剪出 でっち
 // ② 按字符数比例切分读音，边界不落在小書き仮名上
 function distributeReading(base, reading) {
   const chars = [...base];
@@ -2497,19 +2499,25 @@ function distributeReading(base, reading) {
   const n = isKanji.filter(Boolean).length;
   if (!n || r.length === 0) return chars.map(c => ({ char: c, rt: '' }));
 
-  // 剪尾部假名：base 末尾连续假名与读音末尾相同时，读音只保留给汉字的部分
+  // 剪尾部假名：取尾部假名 run 中紧邻汉字的前 k 个，与读音末尾做最长匹配
   let tailKana = 0;
   for (let i = chars.length - 1; i >= 0 && !KANJI_RE.test(chars[i]); i--) tailKana++;
-  if (tailKana && tailKana < r.length &&
-      r.slice(-tailKana).join('') === chars.slice(-tailKana).join('')) {
-    r = r.slice(0, r.length - tailKana);
+  for (let k = tailKana; k >= 1; k--) {
+    if (k < r.length &&
+        chars.slice(chars.length - tailKana, chars.length - tailKana + k).join('') === r.slice(-k).join('')) {
+      r = r.slice(0, r.length - k);
+      break;
+    }
   }
-  // 剪头部假名
+  // 剪头部假名：取头部假名 run 中紧邻汉字的后 k 个，与读音开头做最长匹配
   let headKana = 0;
   for (let i = 0; i < chars.length && !KANJI_RE.test(chars[i]); i++) headKana++;
-  if (headKana && headKana < r.length &&
-      r.slice(0, headKana).join('') === chars.slice(0, headKana).join('')) {
-    r = r.slice(headKana);
+  for (let k = headKana; k >= 1; k--) {
+    if (k < r.length &&
+        chars.slice(headKana - k, headKana).join('') === r.slice(0, k).join('')) {
+      r = r.slice(k);
+      break;
+    }
   }
 
   const m = r.length;
