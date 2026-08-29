@@ -130,6 +130,7 @@ export default function App() {
     const html = document.documentElement;
     html.style.zoom = zoom === 1 ? '' : String(zoom);
     document.body.style.height = zoom === 1 ? '' : (100 / zoom) + 'vh';
+    html.style.setProperty('--ui-z', String(zoom));
     store.set('zoom', zoom);
   }, [zoom]);
   useEffect(() => { applyPalette(hue); }, [hue]);
@@ -1125,10 +1126,12 @@ function SelectionPopup({ onLookUp }) {
         if (text === closedTextRef.current) return;
       }
       const jp = /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]/.test(text);
+      // html zoom 会放大布局坐标，而 clientX/Y 是未缩放视口坐标，需要反除对齐
+      const z = parseFloat(document.documentElement.style.zoom) || 1;
       setPopup({
         text, jp,
-        x: Math.min(e.clientX, window.innerWidth - 220),
-        y: Math.min(e.clientY + 8, window.innerHeight - 180),
+        x: Math.min(e.clientX / z, window.innerWidth / z - 220),
+        y: Math.min((e.clientY + 8) / z, window.innerHeight / z - 180),
         fixed: !!e.target.closest('#modalBody'),
       });
     };
