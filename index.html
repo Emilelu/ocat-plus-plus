@@ -6,10 +6,14 @@
   <meta name="color-scheme" content="light dark">
   <title>OCAT++</title>
   <link rel="icon" href="https://writer.drakeet.com/images/orca_dark.png">
-  <script src="https://sql.js.org/dist/sql-wasm.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/tiny-segmenter@0.2.0/dist/tiny-segmenter.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.min.js"></script>
+  <script>
+    // 尽早恢复上次的主题，避免加载闪烁
+    try { var _ocatTheme = localStorage.getItem('ocat_theme'); if (_ocatTheme) document.documentElement.setAttribute('data-theme', _ocatTheme); } catch (e) {}
+  </script>
+  <script src="vendor/sql-wasm.js"></script>
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/tiny-segmenter.js"></script>
+  <script src="vendor/kuromoji.min.js"></script>
 <style>
 /* ============================================================
    Material Design 3 Tokens - Base (Light)
@@ -447,10 +451,16 @@ body {
 .sentence-row .sen-ja {
   font-family: var(--font-ja); font-size: 15px; line-height: 2.8; margin-bottom: 2px;
 }
-.sentence-row .sen-ja ruby { ruby-position: over; }
+.sentence-row .sen-ja ruby {
+  ruby-position: over;
+  -webkit-ruby-position: over;
+  ruby-align: center;
+  white-space: nowrap;
+}
 .sentence-row .sen-ja rt {
   font-size: .45em; color: var(--md-sys-color-on-surface-variant);
   font-family: var(--font-ja); line-height: 1.2; text-align: center;
+  letter-spacing: normal;
   user-select: none; -webkit-user-select: none;
 }
 .sentence-row .sen-ruby { font: var(--md-sys-typescale-body-small); color: var(--md-sys-color-on-surface-variant); }
@@ -670,8 +680,8 @@ body {
         <span class="title" id="toolbarTitle">请选择数据库文件</span>
         <span class="count" id="toolbarCount"></span>
         <span class="spacer"></span>
-        <button class="md-btn md-btn-outlined md-btn-sm" onclick="toggleSelectAll()">全选</button>
-        <button class="md-btn md-btn-text md-btn-sm" onclick="deselectAll()">取消</button>
+        <button class="md-btn md-btn-outlined md-btn-sm" onclick="toggleSelectAll()" title="全选当前收藏夹的所有句子（跨收藏夹搜索时为全部搜索结果）">全选</button>
+        <button class="md-btn md-btn-text md-btn-sm" onclick="deselectAll()" title="清空所有勾选">取消</button>
         <button class="md-btn md-btn-filled md-btn-sm" id="btnExportAnki" onclick="exportAnki()" disabled>📤 Anki</button>
         <button class="md-btn md-btn-outlined md-btn-sm" id="btnExportCSV" onclick="exportCSV()" disabled>CSV</button>
         <button class="md-btn md-btn-text md-btn-sm" id="btnExportTXT" onclick="exportTXT()" disabled>TXT</button>
@@ -700,10 +710,10 @@ body {
       <div id="pbBar" class="playback-bar">
         <span style="font:var(--md-sys-typescale-label-small);margin-right:4px">倍速</span>
         <input type="range" id="speedSlider" min="0.5" max="2.0" step="0.05" value="1.25"
-          oninput="speechRate=parseFloat(this.value);document.getElementById('speedLabel').textContent=speechRate.toFixed(2)+'x'"
+          oninput="speechRate=parseFloat(this.value);document.getElementById('speedLabel').textContent=speechRate.toFixed(2)+'x';store.set('rate',speechRate)"
           style="width:80px;accent-color:var(--md-sys-color-primary)">
         <span id="speedLabel" style="font:var(--md-sys-typescale-label-small);min-width:36px">1.25x</span>
-        <select id="voiceSelect" onchange="selectedVoiceURI=this.value;if(isPlaying){stopSpeech();playAll()}" style="max-width:140px;height:28px;font-size:11px;border:1px solid var(--md-sys-color-outline);border-radius:4px;background:var(--md-sys-color-surface);color:var(--md-sys-color-on-surface)"><option value="">自动</option></select>
+        <select id="voiceSelect" onchange="selectedVoiceURI=this.value;store.set('voice',selectedVoiceURI);if(isPlaying&&!window.speechSynthesis.paused){window.speechSynthesis.cancel();speakCurrent();}" style="max-width:140px;height:28px;font-size:11px;border:1px solid var(--md-sys-color-outline);border-radius:4px;background:var(--md-sys-color-surface);color:var(--md-sys-color-on-surface)"><option value="">自动</option></select>
         <div style="flex:1"></div>
         <button class="md-btn md-btn-text md-btn-sm" onclick="skipPrev()" title="上一句">⏮</button>
         <button class="md-btn md-btn-text md-btn-sm" id="playBtn" onclick="togglePlay()" title="播放" style="font-size:18px">▶️</button>
@@ -731,8 +741,15 @@ body {
 // ============================================================
 // State
 // ============================================================
+// localStorage 封装（个别环境可能禁用，全部 try/catch）
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('ocat_' + k); return v === null ? d : v; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('ocat_' + k, String(v)); } catch {} }
+};
+
 let db = null;
 let dbFileName = 'OCAT.db';
+let dbDirty = false;          // 浏览器内数据与磁盘文件不一致（如导入后未保存）
 let DATA = [];
 let currentCollection = null;
 let selectedConvs = new Set();
@@ -745,34 +762,44 @@ let filterHasTags = false;
 let isCrossSearch = false;
 let renderPage = 0;
 let currentPage = 1;
-let PAGE_SIZE = 50;
+let PAGE_SIZE = parseInt(store.get('pagesize', '50'), 10) || 50;
+
+// db 状态芯片统一入口（含「未保存更改」提示）
+function setDbChip(text, loaded) {
+  const el = document.getElementById('dbStatus');
+  if (!el) return;
+  el.textContent = text + (loaded && dbDirty ? ' · ⚠ 未保存' : '');
+  el.className = 'db-chip' + (loaded ? ' loaded' : '');
+  el.title = loaded && dbDirty ? '浏览器内的数据包含尚未写回磁盘文件的更改，请点击 💾 保存' : '';
+}
 
 // Configure marked
-marked.setOptions({ breaks: true, gfm: true });
+if (typeof marked !== 'undefined') marked.setOptions({ breaks: true, gfm: true });
 
 // ============================================================
 // DB
 // ============================================================
 async function syncFromPhone() {
+  if (typeof initSqlJs === 'undefined') { snackbar('核心库 vendor/sql-wasm.js 未加载，请检查项目文件'); return; }
   try {
-    const status = document.getElementById('dbStatus');
-    status.textContent = '同步中...'; status.className = 'db-chip';
+    dbDirty = false;
+    setDbChip('同步中...', false);
     const resp = await fetch('http://localhost:8899/api/sync', { signal: AbortSignal.timeout(30000) });
     if (resp.ok) {
       const buf = await resp.arrayBuffer();
-      const SQL = await initSqlJs({ locateFile: f => `https://sql.js.org/dist/${f}` });
+      const SQL = await initSqlJs({ locateFile: f => `vendor/${f}` });
       db = new SQL.Database(new Uint8Array(buf));
-      status.textContent = '已同步'; status.className = 'db-chip loaded';
+      setDbChip('已同步', true);
       document.getElementById('searchInput').disabled = false;
       await loadAllData();
-      cacheData('OCAT.db');
+      cacheData('OCAT.db', false);
       snackbar('✅ 已从手机同步最新数据库', true);
       return;
     }
     // 服务器返回了错误信息
     const err = await resp.json().catch(() => ({}));
     snackbar('同步失败: ' + (err.error || '未知错误'));
-    status.textContent = '未加载'; status.className = 'db-chip';
+    if (!db) setDbChip('未加载', false); else setDbChip(dbFileName, true);
   } catch {
     // 网络错误：服务器未启动
     showSyncHelp();
@@ -790,7 +817,7 @@ function copySyncCmd() {
 }
 
 function showSyncHelp() {
-  document.getElementById('dbStatus').textContent = '未加载'; document.getElementById('dbStatus').className = 'db-chip';
+  if (!db) setDbChip('未加载', false);   // 已有数据库加载时不要误清状态
   const dir = decodeURIComponent(window.location.href.replace('/index.html','').replace('file:///',''));
   const cmd = `cmd /c "cd /d ${dir} && python sync_server.py"`;
   document.getElementById('modalBody').innerHTML = `
@@ -805,9 +832,29 @@ function showSyncHelp() {
   document.getElementById('modalOverlay').style.display = 'flex';
 }
 
-function saveDatabase() {
+async function saveDatabase() {
   if (!db) { snackbar('请先加载一个数据库'); return; }
   const data = db.export();
+  // Chromium：直接写回文件（可覆盖原文件，免去手动替换）
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: dbFileName || 'OCAT.db',
+        types: [{ description: 'SQLite 数据库', accept: { 'application/octet-stream': ['.db'] } }]
+      });
+      const w = await handle.createWritable();
+      await w.write(data);
+      await w.close();
+      dbDirty = false;
+      setDbChip(handle.name, true);
+      cacheData(dbFileName || 'OCAT.db', false);
+      snackbar('已保存到 ' + handle.name, true);
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;   // 用户取消
+      // 其他错误走下载兜底
+    }
+  }
   const blob = new Blob([data], { type: 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -815,18 +862,22 @@ function saveDatabase() {
   a.download = dbFileName || 'OCAT.db';
   a.click();
   URL.revokeObjectURL(url);
+  dbDirty = false;
+  setDbChip(dbFileName || '已加载', true);
+  cacheData(dbFileName || 'OCAT.db', false);
   snackbar('数据库已导出，请替换原文件', true);
 }
 
 async function openImportDialog() {
   if (!db) { snackbar('请先加载一个数据库'); return; }
+  if (typeof initSqlJs === 'undefined') { snackbar('核心库 vendor/sql-wasm.js 未加载，请检查项目文件'); return; }
   const input = document.createElement('input');
   input.type = 'file'; input.accept = '.db';
   input.onchange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const buf = await file.arrayBuffer();
-    const SQL = await initSqlJs({ locateFile: f => `https://sql.js.org/dist/${f}` });
+    const SQL = await initSqlJs({ locateFile: f => `vendor/${f}` });
     const srcDb = new SQL.Database(new Uint8Array(buf));
     const collections = srcDb.exec("SELECT id, title, lang, translationLang, summary FROM CollectionList WHERE deleted = 0 ORDER BY \`index\`");
     srcDb.close();
@@ -852,18 +903,19 @@ async function openImportDialog() {
 
 async function importSelectedCollections(fileName) {
   if (!db || !window._importBuf) return;
+  if (typeof initSqlJs === 'undefined') { snackbar('核心库 vendor/sql-wasm.js 未加载，请检查项目文件'); return; }
   const selectedIds = Array.from(document.querySelectorAll('#modalBody input[type=checkbox]:checked')).map(cb => cb.dataset.id);
   if (!selectedIds.length) { snackbar('请选择至少一个收藏夹'); return; }
   closeModal();
-  const SQL = await initSqlJs({ locateFile: f => `https://sql.js.org/dist/${f}` });
+  const SQL = await initSqlJs({ locateFile: f => `vendor/${f}` });
   const srcDb = new SQL.Database(new Uint8Array(window._importBuf));
-  let imported = 0;
+  let imported = 0, skipped = 0;
   db.run('BEGIN TRANSACTION');
   try {
     for (const colId of selectedIds) {
       // 检查是否已存在
       const existing = db.exec(`SELECT id FROM CollectionList WHERE id = '${colId}'`);
-      if (existing.length && existing[0].values.length) continue;
+      if (existing.length && existing[0].values.length) { skipped++; continue; }
       // 复制 CollectionList
       const cl = srcDb.exec(`SELECT * FROM CollectionList WHERE id = '${colId}'`);
       if (!cl.length || !cl[0].values.length) continue;
@@ -896,10 +948,12 @@ async function importSelectedCollections(fileName) {
     srcDb.close();
     delete window._importBuf;
     delete window._importRows;
-    snackbar(`成功导入 ${imported} 个收藏夹`);
+    dbDirty = true;   // 导入只写进了浏览器内存/缓存，磁盘文件还没更新
+    setDbChip(dbFileName || '已加载', true);
+    snackbar(`成功导入 ${imported} 个收藏夹` + (skipped ? `，${skipped} 个已存在跳过` : '') + (imported ? '，记得 💾 保存' : ''), imported > 0);
     // 重新加载数据
     await loadAllData();
-    cacheData(db.name || 'OCAT.db');
+    cacheData(dbFileName || 'OCAT.db', true);
     renderNav();
     if (currentCollection) {
       applyFilters();
@@ -916,11 +970,14 @@ async function clearCache() {
   req.onsuccess = () => {
     req.result.close();
     indexedDB.deleteDatabase('ocat_cache');
-    DATA = []; currentCollection = null;
+    stopSpeech();
+    db = null; dbDirty = false; DATA = []; currentCollection = null;
+    currentSpeechIndex = -1; window.fullPlaylist = []; window._shuffleRecent = [];
     renderNav();
     document.getElementById('convList').innerHTML = `<div class="empty-state"><div class="icon">📂</div><div class="title">欢迎使用 OCAT++</div><div class="desc">点击上方「选择数据库」加载 SQLite DB 文件</div></div>`;
-    document.getElementById('dbStatus').textContent = '未加载';
-    document.getElementById('dbStatus').className = 'db-chip';
+    const oldPager = document.getElementById('paginationBar');
+    if (oldPager) oldPager.remove();
+    setDbChip('未加载', false);
     document.getElementById('searchInput').disabled = true;
     document.getElementById('headerStats').textContent = '';
     document.getElementById('toolbarTitle').textContent = '请选择数据库文件';
@@ -946,22 +1003,22 @@ async function openDatabase() {
 }
 
 async function loadDB(buf, name) {
-  const SQL = await initSqlJs({ locateFile: f => `https://sql.js.org/dist/${f}` });
+  const SQL = await initSqlJs({ locateFile: f => `vendor/${f}` });
   db = new SQL.Database(new Uint8Array(buf));
-  document.getElementById('dbStatus').textContent = name || '已加载';
-  document.getElementById('dbStatus').className = 'db-chip loaded';
+  dbDirty = false;
+  setDbChip(name || '已加载', true);
   document.getElementById('searchInput').disabled = false;
   await loadAllData();
   snackbar('数据库加载成功', true);
 }
 
 // IndexedDB 缓存 — 直接缓存解析后的 DATA
-function cacheData(name) {
+function cacheData(name, dirty = dbDirty) {
   const req = indexedDB.open('ocat_cache', 1);
   req.onupgradeneeded = () => { req.result.createObjectStore('data'); };
   req.onsuccess = () => {
     const tx = req.result.transaction('data', 'readwrite');
-    tx.objectStore('data').put({ data: DATA, name, time: Date.now() }, 'current');
+    tx.objectStore('data').put({ data: DATA, name, time: Date.now(), dirty: !!dirty }, 'current');
     tx.oncomplete = () => req.result.close();
   };
 }
@@ -996,15 +1053,14 @@ async function loadCachedData() {
   const cached = await loadCachedData();
   if (cached && cached.data && cached.data.length > 0) {
     DATA = cached.data;
-    document.getElementById('dbStatus').textContent = cached.name || '已缓存';
-    document.getElementById('dbStatus').className = 'db-chip loaded';
+    dbDirty = !!cached.dirty;
     document.getElementById('searchInput').disabled = false;
     renderNav();
     const totalC = DATA.reduce((s, c) => s + allConvs(c).length, 0);
     const totalS = DATA.reduce((s, c) => s + allConvs(c).reduce((t, cv) => t + cv.sentences.length, 0), 0);
     document.getElementById('headerStats').textContent = `${DATA.length} 收藏夹 · ${totalC} 对话 · ${totalS} 句`;
     const age = Math.round((Date.now() - cached.time) / 60000);
-    document.getElementById('dbStatus').textContent = (cached.name || '已缓存') + (age > 0 ? ` (${age}分钟前)` : '');
+    setDbChip((cached.name || '已缓存') + (age > 0 ? ` (${age}分钟前)` : ''), true);
   }
 })();
 
@@ -1126,7 +1182,7 @@ function selectCollection(idx) {
   selectedConvs.clear(); selectedSentences.clear(); expandedConvs.clear(); collapsedSections.clear();
   currentPage = 1; activeSectionIdx = -1;
   // 重置播放
-  stopSpeech(); currentSpeechIndex = -1; currentSpeechList = [];
+  stopSpeech(); currentSpeechIndex = -1; window.fullPlaylist = []; window._shuffleRecent = [];
   // 有分栏的收藏夹：默认折叠除第一个外的所有分栏
   if (currentCollection.hasSections && currentCollection.sections) {
     currentCollection.sections.forEach((sec, i) => {
@@ -1203,16 +1259,22 @@ function crossSearch(keyword) {
   document.getElementById('toolbarTitle').textContent = `🔍 跨收藏夹搜索`;
   document.getElementById('toolbarCount').textContent = `${results.length} 个对话`;
   document.getElementById('searchHint').textContent = `在 ${DATA.length} 个收藏夹中找到 ${results.reduce((s, r) => s + r.conv.sentences.length, 0)} 条句子`;
+  window._searchResults = results;
 
   const container = document.getElementById('convList');
   if (results.length === 0) {
+    window.currentRenderItems = [];
+    window.currentRenderer = null;
+    buildFullPlaylist();
+    const oldPager0 = document.getElementById('paginationBar');
+    if (oldPager0) oldPager0.remove();
     container.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><div class="title">没有匹配的结果</div></div>`;
     return;
   }
 
-  container.innerHTML = results.slice(0, 300).map(r => {
-    return renderConvItem(r.conv, r.collection);
-  }).join('');
+  const capped = results.slice(0, 300);
+  _renderPageAt(capped, container, r => renderConvItem(r.conv, r.collection), 1);
+  buildFullPlaylist();
 
   if (results.length > 300) {
     container.innerHTML += `<div style="padding:16px;text-align:center;color:var(--md-sys-color-on-surface-variant)">仅显示前 300 个对话，请缩小搜索范围</div>`;
@@ -1223,7 +1285,7 @@ function applyFilters() {
   if (isCrossSearch) return;
   if (!currentCollection) return;
   const wasPlaying = isPlaying;
-  const savedIdx = currentSpeechIndex;
+  const savedSid = (window.fullPlaylist || [])[currentSpeechIndex]?.id ?? null;
   const keyword = document.getElementById('searchInput').value.toLowerCase().trim();
   const field = document.getElementById('searchField').value;
   const convs = allConvs(currentCollection);
@@ -1260,13 +1322,15 @@ function applyFilters() {
   }
   document.getElementById('searchHint').textContent = keyword ? '找到匹配结果' : '';
   updateToolbar();
-  // 恢复播放高亮
-  if (wasPlaying) {
-    setTimeout(() => {
-      currentSpeechIndex = savedIdx;
-      buildSpeechList();
-      highlightCurrentSentence();
-    }, 100);
+  buildFullPlaylist();
+  // 恢复播放高亮：尽量定位回原来那句
+  if (wasPlaying && window.fullPlaylist.length) {
+    let idx = savedSid != null
+      ? window.fullPlaylist.findIndex(it => String(it.id) === String(savedSid))
+      : -1;
+    if (idx < 0) idx = Math.min(Math.max(currentSpeechIndex, 0), window.fullPlaylist.length - 1);
+    currentSpeechIndex = idx;
+    highlightCurrentSentence();
   }
 }
 
@@ -1286,26 +1350,18 @@ function renderConversations(convs) {
   currentPage = Math.min(currentPage, Math.ceil(convs.length / PAGE_SIZE) || 1);
   const container = document.getElementById('convList');
   if (convs.length === 0) {
+    window.currentRenderItems = []; window.currentRenderer = null;
+    buildFullPlaylist();
+    const oldPager = document.getElementById('paginationBar');
+    if (oldPager) oldPager.remove();
     container.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><div class="title">没有匹配的结果</div></div>`;
     return;
   }
-  _renderPageAt(convs, container, (item) => renderConvItem(item), currentPage);
+  _renderPageAt(convs.map(c => ({ conv: c })), container, (item) => renderConvItem(item.conv), currentPage);
 }
 
-function renderSections(sections) {
-  const container = document.getElementById('convList');
-  const navContainer = document.getElementById('sectionNav');
-  if (sections.length === 0) {
-    container.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><div class="title">没有匹配的结果</div></div>`;
-    navContainer.style.display = 'none';
-    return;
-  }
-  navContainer.style.display = 'flex';
-  navContainer.innerHTML = sections.map((sec, si) =>
-    `<span class="nav-chip ${si === activeSectionIdx ? 'active' : ''}" onclick="scrollToSection('sec-${si}')">${escHtml(sec.title || '(未分类)')}</span>`
-  ).join('');
-
-  // 将分栏展开为扁平列表用于分页
+// 分栏视图 → 扁平列表（带 conv 引用，供播放列表/分页定位使用）
+function buildSectionFlatItems(sections) {
   const flatItems = [];
   sections.forEach((sec, si) => {
     const convCount = sec.conversations.length;
@@ -1321,10 +1377,30 @@ function renderSections(sections) {
         </div>
         <div class="section-group-body">`
     });
-    sec.conversations.forEach(c => flatItems.push({ type: 'conv', html: renderConvItem(c) }));
+    sec.conversations.forEach(c => flatItems.push({ type: 'conv', html: renderConvItem(c), conv: c }));
     flatItems.push({ type: 'close', html: '</div></div>' });
   });
+  return flatItems;
+}
 
+function renderSections(sections) {
+  const container = document.getElementById('convList');
+  const navContainer = document.getElementById('sectionNav');
+  if (sections.length === 0) {
+    window.currentRenderItems = []; window.currentRenderer = null;
+    buildFullPlaylist();
+    const oldPager = document.getElementById('paginationBar');
+    if (oldPager) oldPager.remove();
+    container.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><div class="title">没有匹配的结果</div></div>`;
+    navContainer.style.display = 'none';
+    return;
+  }
+  navContainer.style.display = 'flex';
+  navContainer.innerHTML = sections.map((sec, si) =>
+    `<span class="nav-chip ${si === activeSectionIdx ? 'active' : ''}" onclick="scrollToSection('sec-${si}')">${escHtml(sec.title || '(未分类)')}</span>`
+  ).join('');
+
+  const flatItems = buildSectionFlatItems(sections);
   currentPage = Math.min(currentPage, Math.ceil(flatItems.length / PAGE_SIZE) || 1);
   _renderPageAt(flatItems, container, (item) => item.html, currentPage);
 }
@@ -1341,13 +1417,6 @@ function _renderPageAt(items, container, renderer, page) {
   const slice = items.slice(start, end);
   container.innerHTML = slice.map(renderer).join('');
   renderPage = end;
-
-  // 播放中切换页面时重建列表
-  if (isPlaying) {
-    buildSpeechList();
-    // 如果当前索引超出新列表范围，重置到 0
-    if (currentSpeechIndex >= currentSpeechList.length) currentSpeechIndex = 0;
-  }
 
   // 移除旧分页
   const oldPager = document.getElementById('paginationBar');
@@ -1368,9 +1437,10 @@ function _buildPagerHTML(page, totalPages, items, renderer) {
   // 每页条数选择
   html += `<select class="md-select" style="height:28px;font-size:12px" id="pageSizeSelect" onchange="
     PAGE_SIZE=parseInt(this.value);
-    const p=document.getElementById('paginationBar');
-    if(p)p.remove();
-    _renderPageAt(currentRenderItems,document.getElementById('convList'),currentRenderer,1)
+    store.set('pagesize',PAGE_SIZE);
+    _renderPageAt(currentRenderItems,document.getElementById('convList'),currentRenderer,1);
+    buildFullPlaylist();
+    if(isPlaying)highlightCurrentSentence();
   ">
     ${[25,50,100,200].map(n => `<option value="${n}" ${PAGE_SIZE===n?'selected':''}>${n}条/页</option>`).join('')}
   </select>`;
@@ -1405,29 +1475,6 @@ function _getPageRange(page, total) {
   return range;
 }
 
-function _setupPagerScroll(container, pager) {
-  let lastScroll = 0, hideTimer;
-  container.addEventListener('scroll', () => {
-    const delta = container.scrollTop - lastScroll;
-    if (delta < -10) {
-      // 向上滚动 → 隐藏
-      pager.style.transform = 'translateY(100%)';
-      pager.style.opacity = '0';
-    } else if (delta > 5) {
-      // 向下滚动 → 显示
-      pager.style.transform = 'translateY(0)';
-      pager.style.opacity = '1';
-    }
-    lastScroll = container.scrollTop;
-    // 停止滚动 1 秒后显示
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      pager.style.transform = 'translateY(0)';
-      pager.style.opacity = '1';
-    }, 1000);
-  });
-}
-
 function stripMarkdown(text) {
   if (!text) return '';
   return text
@@ -1436,7 +1483,7 @@ function stripMarkdown(text) {
     .replace(/---+/g, '')               // 移除分割线
     .replace(/\n{2,}/g, ' ')            // 多个换行合并
     .replace(/^\s*[-*+]\s/gm, '')       // 移除列表标记
-    .replace(/\d+\.\s/g, '')            // 移除编号
+    .replace(/^\s*\d+\.\s/gm, '')       // 移除行首编号（不碰句中的数字）
     .trim();
 }
 
@@ -1453,23 +1500,22 @@ function renderConvItem(conv, collection) {
     const tags = [];
     if (s.isMastered) tags.push('<span class="sen-tag mastered">✓ 已掌握</span>');
     if (s.tags) tags.push(`<span class="sen-tag">${escHtml(s.tags)}</span>`);
-    return `<div class="sentence-row" onclick="if(isPlaying)speakSingleSentence(event,'${escAttr(s.content)}','${escAttr(s.lang || 'ja')}')">
+    return `<div class="sentence-row" data-sid="${escAttr(s.id)}" data-lang="${escAttr(s.lang || 'ja')}" onclick="onRowClick(event)">
       <input type="checkbox" class="md-checkbox" ${isSenSelected ? 'checked' : ''}
         onchange="toggleSentence('${s.id}', this.checked)" onclick="event.stopPropagation()">
       <div class="sen-content">
         <div class="sen-ja">${renderContentWithRuby(s.content, s.ruby)}</div>
-        ${s.ruby ? '' : ''}
         <div class="sen-zh">${escHtml(s.translation)}</div>
         <div class="sen-tags">${tags.join('')}</div>
       </div>
-      <span class="sen-lookup" onclick="event.stopPropagation();lookupWord(event,'${escAttr(s.content)}')">📖</span>
-      <span class="sen-lookup" onclick="event.stopPropagation();speakSingleSentence(event,'${escAttr(s.content)}','${escAttr(s.lang || 'ja')}')">🔊</span>
+      <span class="sen-lookup" title="分词查词典" onclick="event.stopPropagation();lookupFromRow(event)">📖</span>
+      <span class="sen-lookup" title="只读这一句" onclick="event.stopPropagation();speakOnceFromRow(event)">🔊</span>
     </div>`;
   }).join('');
 
   const colBadge = collection ? `<div class="collection-badge">📁 ${escHtml(collection.title)}</div>` : '';
 
-  return `<div class="conv-card ${isExpanded ? 'expanded' : ''} ${isSelected ? 'selected' : ''}" style="animation-delay:0ms">
+  return `<div class="conv-card ${isExpanded ? 'expanded' : ''} ${isSelected ? 'selected' : ''}" data-msg-id="${escAttr(conv.messageId)}" style="animation-delay:0ms">
     <div class="conv-card-header" onclick="toggleConv('${conv.messageId}')">
       <input type="checkbox" class="md-checkbox" ${isSelected ? 'checked' : ''}
         onchange="toggleConvSelect('${conv.messageId}', this.checked)" onclick="event.stopPropagation()">
@@ -1496,29 +1542,14 @@ function scrollToSection(secId) {
   if (!el) {
     if (!currentCollection || !currentCollection.hasSections) return;
     // 计算目标分栏在扁平列表中的页码
-    const flatItems = [];
-    currentCollection.sections.forEach((sec, si) => {
-      const convCount = sec.conversations.length;
-      const senCount = sec.conversations.reduce((t, c) => t + c.sentences.length, 0);
-      const sid = `sec-${si}`;
-      const isCollapsed = collapsedSections.has(sid);
-      flatItems.push({
-        html: `<div class="section-group ${isCollapsed ? 'collapsed' : ''}" id="${sid}">
-          <div class="section-group-header" onclick="toggleSection('${sid}')">
-            <span class="section-arrow">▼</span> 📌 ${escHtml(sec.title || '(未分类)')}
-            <span class="section-count">${convCount} 对话 · ${senCount} 句</span>
-          </div>
-          <div class="section-group-body">`
-      });
-      sec.conversations.forEach(c => flatItems.push({ html: renderConvItem(c) }));
-      flatItems.push({ html: '</div></div>' });
-    });
+    const flatItems = buildSectionFlatItems(currentCollection.sections);
     // 找到目标分栏的索引
     const targetIdx = flatItems.findIndex(item => item.html.includes(`id="${secId}"`));
     const targetPage = Math.floor(targetIdx / PAGE_SIZE) + 1;
     const pager = document.getElementById('paginationBar');
     if (pager) pager.remove();
     _renderPageAt(flatItems, document.getElementById('convList'), (item) => item.html, targetPage);
+    buildFullPlaylist();
     el = document.getElementById(secId);
   }
   if (!el) return;
@@ -1536,8 +1567,9 @@ function scrollToSection(secId) {
 // ============================================================
 function toggleConv(msgId) {
   expandedConvs.has(msgId) ? expandedConvs.delete(msgId) : expandedConvs.add(msgId);
-  if (isCrossSearch) crossSearch(document.getElementById('searchInput').value.toLowerCase().trim());
-  else applyFilters();
+  // 局部更新，不重渲染整个列表（避免卡片动画重放）
+  const card = document.querySelector(`#convList .conv-card[data-msg-id="${msgId}"]`);
+  if (card) card.classList.toggle('expanded', expandedConvs.has(msgId));
 }
 
 function toggleSection(secId) {
@@ -1546,22 +1578,19 @@ function toggleSection(secId) {
 }
 
 function toggleConvSelect(msgId, checked) {
+  // 在全部数据里找（跨收藏夹搜索时结果可能来自其他收藏夹）
+  const conv = findConvAnywhere(msgId);
   if (checked) {
     selectedConvs.add(msgId);
     // 级联勾选该对话下所有句子
-    const convs = currentCollection ? allConvs(currentCollection) : [];
-    const conv = convs.find(c => c.messageId === msgId);
     if (conv) conv.sentences.forEach(s => { if (s.type !== 'section') selectedSentences.add(s.id); });
   } else {
     selectedConvs.delete(msgId);
     // 取消勾选时也取消该对话下所有句子
-    const convs = currentCollection ? allConvs(currentCollection) : [];
-    const conv = convs.find(c => c.messageId === msgId);
     if (conv) conv.sentences.forEach(s => selectedSentences.delete(s.id));
   }
+  syncCardSelection(msgId);
   updateToolbar();
-  if (isCrossSearch) crossSearch(document.getElementById('searchInput').value.toLowerCase().trim());
-  else applyFilters();
 }
 
 function toggleSentence(senId, checked) {
@@ -1570,30 +1599,66 @@ function toggleSentence(senId, checked) {
 }
 
 function toggleSelectAll() {
-  const convs = currentCollection ? allConvs(currentCollection) : [];
-  if (selectedConvs.size === convs.length) {
-    selectedConvs.clear();
-    selectedSentences.clear();
+  if (isCrossSearch) {
+    // 跨收藏夹搜索：全选的是搜索结果，不是上次的收藏夹
+    const results = window._searchResults || [];
+    const allSelected = results.length > 0 && results.every(r => selectedConvs.has(r.conv.messageId));
+    if (allSelected) {
+      selectedConvs.clear();
+      selectedSentences.clear();
+    } else {
+      results.forEach(r => {
+        selectedConvs.add(r.conv.messageId);
+        const orig = findConvAnywhere(r.conv.messageId);
+        if (orig) orig.sentences.forEach(s => { if (s.type !== 'section') selectedSentences.add(s.id); });
+      });
+    }
   } else {
-    convs.forEach(c => {
-      selectedConvs.add(c.messageId);
-      c.sentences.filter(s => s.type !== 'section').forEach(s => selectedSentences.add(s.id));
-    });
+    const convs = currentCollection ? allConvs(currentCollection) : [];
+    if (convs.length && selectedConvs.size >= convs.length) {
+      selectedConvs.clear();
+      selectedSentences.clear();
+    } else {
+      convs.forEach(c => {
+        selectedConvs.add(c.messageId);
+        c.sentences.filter(s => s.type !== 'section').forEach(s => selectedSentences.add(s.id));
+      });
+    }
   }
-  if (isCrossSearch) crossSearch(document.getElementById('searchInput').value.toLowerCase().trim());
-  else applyFilters();
+  syncAllSelectionUI();
   updateToolbar();
 }
 
 function deselectAll() {
   selectedConvs.clear(); selectedSentences.clear();
-  if (isCrossSearch) crossSearch(document.getElementById('searchInput').value.toLowerCase().trim());
-  else applyFilters();
+  syncAllSelectionUI();
   updateToolbar();
 }
 
+// 局部同步某个对话卡片的勾选 UI
+function syncCardSelection(msgId) {
+  const card = document.querySelector(`#convList .conv-card[data-msg-id="${msgId}"]`);
+  if (!card) return;
+  card.classList.toggle('selected', selectedConvs.has(msgId));
+  const cb = card.querySelector('.conv-card-header .md-checkbox');
+  if (cb) cb.checked = selectedConvs.has(msgId);
+  card.querySelectorAll('.sentence-row').forEach(row => {
+    const sid = row.dataset.sid;
+    const scb = row.querySelector('.md-checkbox');
+    if (scb && sid) scb.checked = selectedSentences.has(sid);
+  });
+}
+
+function syncAllSelectionUI() {
+  document.querySelectorAll('#convList .conv-card').forEach(card => {
+    const mid = card.dataset.msgId;
+    if (mid) syncCardSelection(mid);
+  });
+}
+
 function updateToolbar() {
-  const total = selectedConvs.size + selectedSentences.size;
+  // 徽标显示「实际会导出的句子数」，与导出结果一致
+  const total = getSelectedSentences().length;
   ['btnExportAnki', 'btnExportCSV', 'btnExportTXT'].forEach(id => {
     document.getElementById(id).disabled = total === 0;
   });
@@ -1606,6 +1671,7 @@ function updateToolbar() {
 function viewConversation(msgId) {
   const conv = findConvAnywhere(msgId);
   if (!conv) return;
+  window._viewingConv = conv;
 
   // 渲染 markdown 格式的 AI 回复
   const aiText = conv.aiAnswer || '';
@@ -1623,10 +1689,30 @@ function viewConversation(msgId) {
       ${escHtml(conv.userQuestion || '(无)')}
     </div>
     <div class="md-content">
-      <div class="label" style="font:var(--md-sys-typescale-label-small);opacity:.7;margin-bottom:8px">🤖 AI 回复</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div class="label" style="font:var(--md-sys-typescale-label-small);opacity:.7">🤖 AI 回复</div>
+        <button class="md-btn md-btn-text md-btn-sm" onclick="copyConvText()">📋 复制全文</button>
+      </div>
       ${mdHtml}
     </div>`;
   document.getElementById('modalOverlay').style.display = 'flex';
+}
+
+async function copyConvText() {
+  const conv = window._viewingConv;
+  if (!conv) return;
+  const text = (conv.userQuestion ? conv.userQuestion + '\n\n' : '') + (conv.aiAnswer || '');
+  try {
+    await navigator.clipboard.writeText(text);
+    snackbar('已复制全文', true);
+  } catch {
+    // 兜底：临时 textarea + execCommand
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); snackbar('已复制全文', true); } catch { snackbar('复制失败，请手动选择复制'); }
+    document.body.removeChild(ta);
+  }
 }
 
 function closeModal(e) {
@@ -1663,6 +1749,17 @@ function getSelectedSentences() {
   return all;
 }
 
+// 导出文件名：收藏夹名 + 日期，避免每次导出互相覆盖
+function exportFileBase() {
+  if (isCrossSearch) return 'ocat_跨收藏夹';
+  const t = (currentCollection && currentCollection.title ? currentCollection.title : 'ocat').replace(/[\\/:*?"<>|]/g, '_');
+  return 'ocat_' + t;
+}
+function dateStamp() {
+  const d = new Date();
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function exportAnki() {
   const sentences = getSelectedSentences();
   if (!sentences.length) { snackbar('请先选择要导出的句子'); return; }
@@ -1676,7 +1773,7 @@ function exportAnki() {
     if (s.isMastered) tags.push('mastered');
     csv += `${front},"${back}","${tags.join(' ')}"\n`;
   });
-  downloadFile(csv, `ocat_anki.csv`, 'text/csv;charset=utf-8');
+  downloadFile(csv, `${exportFileBase()}_anki_${dateStamp()}.csv`, 'text/csv;charset=utf-8');
   snackbar(`已导出 ${sentences.length} 条`, true);
 }
 
@@ -1687,7 +1784,7 @@ function exportCSV() {
   sentences.forEach((s, i) => {
     csv += `${i + 1},"${s.collectionName}","${(s.content || '').replace(/"/g, '""')}","${(s.translation || '').replace(/"/g, '""')}","${(s.ruby || '').replace(/"/g, '""')}","${(s.userQuestion || '').replace(/"/g, '""')}","${(s.tags || '').replace(/"/g, '""')}",${s.isMastered ? '是' : ''}\n`;
   });
-  downloadFile(csv, `ocat_sentences.csv`, 'text/csv;charset=utf-8');
+  downloadFile(csv, `${exportFileBase()}_${dateStamp()}.csv`, 'text/csv;charset=utf-8');
   snackbar(`已导出 ${sentences.length} 条`, true);
 }
 
@@ -1702,7 +1799,7 @@ function exportTXT() {
     if (s.userQuestion) txt += `   提问: ${s.userQuestion}\n`;
     txt += '\n';
   });
-  downloadFile(txt, `ocat_sentences.txt`, 'text/plain;charset=utf-8');
+  downloadFile(txt, `${exportFileBase()}_${dateStamp()}.txt`, 'text/plain;charset=utf-8');
   snackbar(`已导出 ${sentences.length} 条`, true);
 }
 
@@ -1714,7 +1811,7 @@ function exportConvAnki(msgId) {
   conv.sentences.filter(s => s.type !== 'section').forEach(s => {
     csv += `"${(s.translation || '').replace(/"/g, '""')}<br><br><small>${(conv.userQuestion || '').replace(/"/g, '""')}</small>","${(s.content || '').replace(/"/g, '""')}","${colName}"\n`;
   });
-  downloadFile(csv, `conv_anki.csv`, 'text/csv;charset=utf-8');
+  downloadFile(csv, `ocat_单对话_${dateStamp()}.csv`, 'text/csv;charset=utf-8');
   snackbar('已导出');
 }
 
@@ -1734,19 +1831,24 @@ function findCollectionName(msgId) {
 }
 
 // ============================================================
-// Word Lookup
+// Playback（数据驱动播放列表：跨分页、跨收藏夹视图统一管理）
 // ============================================================
-let speechRate = 1.25;
-let speechMode = 'loop'; // 'loop', 'shuffle'
+let speechRate = parseFloat(store.get('rate', '1.25')) || 1.25;
+let speechMode = store.get('mode', 'loop') === 'shuffle' ? 'shuffle' : 'loop';
 let currentSpeechIndex = -1;
-let currentSpeechList = [];
 let isPlaying = false;
 let speechVoices = [];
-let selectedVoiceURI = '';
+let selectedVoiceURI = store.get('voice', '');
+window.fullPlaylist = [];      // [{id, content, lang, page, row}]，page/row 用于定位高亮
+window._shuffleRecent = [];    // 随机模式最近播过的索引，避免连续重复
 
 // 预加载语音列表
 speechSynthesis.onvoiceschanged = () => { speechVoices = speechSynthesis.getVoices(); updateVoiceSelector(); };
 speechVoices = speechSynthesis.getVoices();
+
+function langToBcp47(lang) {
+  return lang === 'ja' ? 'ja-JP' : lang === 'en' ? 'en-US' : lang === 'zh' ? 'zh-CN' : (lang || 'ja-JP');
+}
 
 function getVoiceForLang(lang) {
   if (selectedVoiceURI) { const v = speechVoices.find(v => v.voiceURI === selectedVoiceURI); if (v) return v; }
@@ -1761,90 +1863,138 @@ function updateVoiceSelector() {
     speechVoices.map(v => `<option value="${v.voiceURI}" ${v.voiceURI === selectedVoiceURI ? 'selected' : ''}>${v.name} (${v.lang})</option>`).join('');
 }
 
-function speakSingleSentence(e, text, lang) {
-  buildSpeechList();
+// 由当前渲染数据构建整表播放列表（与分页无关，跨页/随机都基于它）
+function buildFullPlaylist() {
+  const items = window.currentRenderItems || [];
+  const list = [];
+  const totalPages = Math.ceil(items.length / PAGE_SIZE) || 1;
+  for (let p = 1; p <= totalPages; p++) {
+    const start = (p - 1) * PAGE_SIZE;
+    const end = Math.min(start + PAGE_SIZE, items.length);
+    let row = 0;
+    for (let i = start; i < end; i++) {
+      const conv = items[i] && items[i].conv;
+      if (!conv) continue;
+      for (const s of conv.sentences) {
+        if (s.type === 'section') continue;
+        list.push({ id: s.id, content: s.content || '', lang: s.lang || 'ja', page: p, row });
+        row++;
+      }
+    }
+  }
+  window.fullPlaylist = list;
+  return list;
+}
+
+// 由行元素反查播放列表索引
+function playlistIndexOfRow(row) {
+  if (!window.fullPlaylist || !window.fullPlaylist.length) buildFullPlaylist();
+  const list = window.fullPlaylist || [];
+  const sid = row.dataset.sid;
+  if (sid) {
+    const i = list.findIndex(it => String(it.id) === sid);
+    if (i >= 0) return i;
+  }
+  const rowIdx = Array.from(document.querySelectorAll('#convList .sentence-row')).indexOf(row);
+  const item = list.find(it => it.page === currentPage && it.row === rowIdx);
+  return item ? list.indexOf(item) : -1;
+}
+
+// 点击句子文字：停止状态 → 从这句开始连播；播放中 → 跳到这句
+function onRowClick(e) {
+  const sel = window.getSelection();
+  if (sel && sel.toString().trim()) return;   // 正在划选文字 → 交给查词弹窗
   const row = e.target.closest('.sentence-row');
-  const rows = document.querySelectorAll('#convList .sentence-row');
-  const idx = Array.from(rows).indexOf(row);
+  if (!row) return;
+  const idx = playlistIndexOfRow(row);
   if (idx < 0) return;
   currentSpeechIndex = idx;
-  isPlaying = true;
-  updatePlayBtn();
-  const cleanText = cleanRubyText(row.querySelector('.sen-ja'));
-  speakSentence(cleanText, lang, currentSpeechList, currentSpeechIndex);
+  if (!isPlaying) { isPlaying = true; updatePlayBtn(); }
+  speakCurrent();
 }
 
-// 当句子列表不足时自动翻页（当前页播放完后自动翻到下一页）
-function ensurePlaylistFilled() {
-  if (currentSpeechIndex < currentSpeechList.length - 1) return;
-  const items = window.currentRenderItems;
-  if (!items) return;
-  const totalPages = Math.ceil(items.length / PAGE_SIZE);
-  if (currentPage >= totalPages) return;
-  const container = document.getElementById('convList');
-  const renderer = window.currentRenderer;
-  _renderPageAt(items, container, renderer, currentPage + 1);
-  buildSpeechList();
-  currentSpeechIndex = 0;
-}
-
-function speakSentence(text, lang, list, index) {
-  if (!('speechSynthesis' in window)) { snackbar('浏览器不支持语音合成'); return; }
-  window.speechSynthesis.cancel();
-  if (list) { currentSpeechList = list; currentSpeechIndex = index; }
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = lang === 'ja' ? 'ja-JP' : lang === 'en' ? 'en-US' : lang === 'zh' ? 'zh-CN' : lang;
+// 🔊：只读这一句（播放中时改为跳到该句继续连播）
+function speakOnceFromRow(e) {
+  if (isPlaying) { onRowClick(e); return; }
+  const row = e.target.closest('.sentence-row');
+  if (!row) return;
+  const ja = row.querySelector('.sen-ja');
+  if (!ja || !('speechSynthesis' in window)) return;
+  const idx = playlistIndexOfRow(row);
+  if (idx >= 0) currentSpeechIndex = idx;   // 之后按播放/空格可从这句接续
+  const lang = row.dataset.lang || 'ja';
+  const synth = window.speechSynthesis;
+  synth.cancel();
+  const u = new SpeechSynthesisUtterance(cleanRubyText(ja));
+  u.lang = langToBcp47(lang);
   const voice = getVoiceForLang(lang);
+  if (voice) u.voice = voice;
+  u.rate = speechRate;
+  synth.speak(u);
+}
+
+function pickShuffle() {
+  const n = (window.fullPlaylist || []).length;
+  if (n <= 1) return 0;
+  const recent = window._shuffleRecent || (window._shuffleRecent = []);
+  let idx, guard = 0;
+  do { idx = Math.floor(Math.random() * n); } while (recent.includes(idx) && guard++ < 50);
+  recent.push(idx);
+  const keep = Math.min(n - 1, 10);
+  while (recent.length > keep) recent.shift();
+  return idx;
+}
+
+function speakCurrent() {
+  const list = window.fullPlaylist || [];
+  const item = list[currentSpeechIndex];
+  if (!item) { isPlaying = false; updatePlayBtn(); return; }
+  if (!('speechSynthesis' in window)) { snackbar('浏览器不支持语音合成'); return; }
+  const synth = window.speechSynthesis;
+  synth.cancel();
+  const u = new SpeechSynthesisUtterance(item.content);
+  u.lang = langToBcp47(item.lang);
+  const voice = getVoiceForLang(item.lang);
   if (voice) u.voice = voice;
   u.rate = speechRate;
   u.onend = () => {
     if (!isPlaying) return;
-    // 当前页最后一句，loop 模式自动翻页
-    if (currentSpeechIndex >= currentSpeechList.length - 1 && speechMode === 'loop') {
-      const items = window.currentRenderItems;
-      if (items) {
-        const totalPages = Math.ceil(items.length / PAGE_SIZE);
-        if (currentPage < totalPages) {
-          _renderPageAt(items, document.getElementById('convList'), window.currentRenderer, currentPage + 1);
-          buildSpeechList();
-          if (currentSpeechList.length > 0) {
-            currentSpeechIndex = 0;
-            speakSentence(currentSpeechList[0].content, currentSpeechList[0].lang, currentSpeechList, 0);
-          }
-          return;
-        }
-      }
-      // 最后一页，停止
-      isPlaying = false; updatePlayBtn();
-      return;
-    }
-    if (speechMode === 'loop') {
-      currentSpeechIndex = (currentSpeechIndex + 1) % currentSpeechList.length;
-    } else {
-      // 随机播放：跨页随机
-      currentSpeechIndex = Math.floor(Math.random() * currentSpeechList.length);
-    }
+    const n = (window.fullPlaylist || []).length;
+    if (!n) { isPlaying = false; updatePlayBtn(); return; }
+    if (speechMode === 'shuffle') currentSpeechIndex = pickShuffle();
+    else currentSpeechIndex = (currentSpeechIndex + 1) % n;   // 列表循环：跨页循环
     highlightCurrentSentence();
-    speakSentence(currentSpeechList[currentSpeechIndex].content, currentSpeechList[currentSpeechIndex].lang, currentSpeechList, currentSpeechIndex);
+    speakCurrent();
   };
-  window.speechSynthesis.speak(u);
+  synth.speak(u);
   highlightCurrentSentence();
 }
 
 function highlightCurrentSentence(clear) {
   document.querySelectorAll('#convList .sentence-row.playing').forEach(el => el.classList.remove('playing'));
-  if (clear || currentSpeechIndex < 0 || currentSpeechIndex >= currentSpeechList.length) return;
-  const rows = document.querySelectorAll('#convList .sentence-row');
-  if (rows[currentSpeechIndex]) {
-    rows[currentSpeechIndex].classList.add('playing');
-    // 自动展开父对话
-    const convCard = rows[currentSpeechIndex].closest('.conv-card');
-    if (convCard && !convCard.classList.contains('expanded')) {
-      const msgId = convCard.dataset.msgId || convCard.querySelector('.conv-card-header')?.getAttribute('onclick')?.match(/toggleConv\('([^']+)'\)/)?.[1];
-      if (msgId) { expandedConvs.add(msgId); convCard.classList.add('expanded'); }
-    }
-    rows[currentSpeechIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const item = (window.fullPlaylist || [])[currentSpeechIndex];
+  if (clear || !item) return;
+  // 高亮句子不在当前页时，自动翻到对应页
+  if (item.page !== currentPage) {
+    _renderPageAt(window.currentRenderItems, document.getElementById('convList'), window.currentRenderer, item.page);
   }
+  const rows = document.querySelectorAll('#convList .sentence-row');
+  const row = document.querySelector(`#convList .sentence-row[data-sid="${item.id}"]`) || rows[item.row];
+  if (!row) return;
+  // 自动展开所在分栏（折叠状态下高亮不可见）
+  const group = row.closest('.section-group');
+  if (group && group.classList.contains('collapsed')) {
+    group.classList.remove('collapsed');
+    collapsedSections.delete(group.id);
+  }
+  // 自动展开父对话卡片
+  const card = row.closest('.conv-card');
+  if (card && !card.classList.contains('expanded')) {
+    const msgId = card.dataset.msgId;
+    if (msgId) { expandedConvs.add(msgId); card.classList.add('expanded'); }
+  }
+  row.classList.add('playing');
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 function cleanRubyText(el) {
@@ -1854,75 +2004,39 @@ function cleanRubyText(el) {
   return clone.textContent.replace(/[\s\n]+/g, ' ').trim();
 }
 
-function buildSpeechList() {
-  const rows = document.querySelectorAll('#convList .sentence-row');
-  currentSpeechList = [];
-  rows.forEach(row => {
-    const ja = row.querySelector('.sen-ja');
-    const lang = row.dataset.lang || 'ja';
-    if (ja) currentSpeechList.push({ content: cleanRubyText(ja), lang });
-  });
-}
-
 function togglePlay() {
-  if (isPlaying) {
-    window.speechSynthesis.pause(); isPlaying = false; updatePlayBtn();
-  } else {
-    // 如果暂停了，继续播放
-    if (window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
-      return;
-    }
-    if (window.speechSynthesis.paused) {
-      window.speechSynthesis.resume(); isPlaying = true; updatePlayBtn();
-    } else {
-      playAll();
-    }
-  }
+  const synth = window.speechSynthesis;
+  if (synth.paused) { synth.resume(); isPlaying = true; updatePlayBtn(); return; }
+  if (isPlaying) { synth.pause(); isPlaying = false; updatePlayBtn(); return; }
+  playAll();
 }
 
 function skipPrev() {
-  if (currentSpeechList.length === 0) { buildSpeechList(); if (currentSpeechList.length === 0) return; }
-  currentSpeechIndex = speechMode === 'shuffle' ? Math.floor(Math.random() * currentSpeechList.length) : (currentSpeechIndex - 1 + currentSpeechList.length) % currentSpeechList.length;
+  buildFullPlaylist();
+  const n = window.fullPlaylist.length;
+  if (!n) { snackbar('当前列表没有句子'); return; }
+  currentSpeechIndex = speechMode === 'shuffle' ? pickShuffle() : (currentSpeechIndex - 1 + n) % n;
   if (!isPlaying) { isPlaying = true; updatePlayBtn(); }
-  else { window.speechSynthesis.cancel(); }
-  speakSentence(currentSpeechList[currentSpeechIndex].content, currentSpeechList[currentSpeechIndex].lang, currentSpeechList, currentSpeechIndex);
+  speakCurrent();
 }
 
 function skipNext() {
-  if (currentSpeechList.length === 0) { buildSpeechList(); if (currentSpeechList.length === 0) return; }
-  if (speechMode === 'shuffle') {
-    currentSpeechIndex = Math.floor(Math.random() * currentSpeechList.length);
-  } else {
-    // 当前页最后一句，翻页
-    if (currentSpeechIndex >= currentSpeechList.length - 1) {
-      const items = window.currentRenderItems;
-      if (items) {
-        const totalPages = Math.ceil(items.length / PAGE_SIZE);
-        if (currentPage < totalPages) {
-          _renderPageAt(items, document.getElementById('convList'), window.currentRenderer, currentPage + 1);
-          buildSpeechList();
-          currentSpeechIndex = 0;
-          if (!isPlaying) { isPlaying = true; updatePlayBtn(); }
-          else { window.speechSynthesis.cancel(); }
-          speakSentence(currentSpeechList[0].content, currentSpeechList[0].lang, currentSpeechList, 0);
-          return;
-        }
-      }
-    }
-    currentSpeechIndex = (currentSpeechIndex + 1) % currentSpeechList.length;
-  }
+  buildFullPlaylist();
+  const n = window.fullPlaylist.length;
+  if (!n) { snackbar('当前列表没有句子'); return; }
+  currentSpeechIndex = speechMode === 'shuffle' ? pickShuffle() : (currentSpeechIndex + 1) % n;
   if (!isPlaying) { isPlaying = true; updatePlayBtn(); }
-  else { window.speechSynthesis.cancel(); }
-  speakSentence(currentSpeechList[currentSpeechIndex].content, currentSpeechList[currentSpeechIndex].lang, currentSpeechList, currentSpeechIndex);
+  speakCurrent();
 }
 
 function playAll() {
-  buildSpeechList();
-  if (currentSpeechList.length === 0) { snackbar('当前列表没有句子'); return; }
-  if (currentSpeechIndex < 0 || currentSpeechIndex >= currentSpeechList.length) currentSpeechIndex = 0;
+  buildFullPlaylist();
+  const n = window.fullPlaylist.length;
+  if (!n) { snackbar('当前列表没有句子'); return; }
+  if (currentSpeechIndex < 0 || currentSpeechIndex >= n) currentSpeechIndex = 0;
   isPlaying = true;
   updatePlayBtn();
-  speakSentence(currentSpeechList[currentSpeechIndex].content, currentSpeechList[currentSpeechIndex].lang, currentSpeechList, currentSpeechIndex);
+  speakCurrent();
 }
 
 function stopSpeech() {
@@ -1943,15 +2057,28 @@ function updatePlayBtn() {
 
 function cycleMode() {
   const modes = ['loop', 'shuffle'];
-  const idx = (modes.indexOf(speechMode) + 1) % modes.length;
-  speechMode = modes[idx];
-  document.getElementById('modeBtn').innerHTML = speechMode === 'loop' ? '🔁' : '🔀';
-  document.getElementById('modeBtn').title = speechMode === 'loop' ? '列表循环' : '随机播放';
-  if (!isPlaying && currentSpeechList.length > 0) { playAll(); }
+  speechMode = modes[(modes.indexOf(speechMode) + 1) % modes.length];
+  window._shuffleRecent = [];
+  store.set('mode', speechMode);
+  const btn = document.getElementById('modeBtn');
+  btn.innerHTML = speechMode === 'loop' ? '🔁' : '🔀';
+  btn.title = speechMode === 'loop' ? '列表循环' : '随机播放（跨页、不重复）';
 }
 
-// 初始化模式按钮
-setTimeout(() => { document.getElementById('modeBtn').innerHTML = '🔁'; document.getElementById('modeBtn').title = '列表循环'; }, 0);
+// 播放控件初始化：恢复上次的倍速/模式
+(function initPlaybackUI() {
+  const slider = document.getElementById('speedSlider');
+  if (slider) {
+    slider.value = speechRate;
+    document.getElementById('speedLabel').textContent = speechRate.toFixed(2) + 'x';
+  }
+  const btn = document.getElementById('modeBtn');
+  if (btn) {
+    btn.innerHTML = speechMode === 'loop' ? '🔁' : '🔀';
+    btn.title = speechMode === 'loop' ? '列表循环' : '随机播放（跨页、不重复）';
+  }
+  updateVoiceSelector();
+})();
 
 // 回到顶部悬浮按钮
 (function() {
@@ -1969,13 +2096,21 @@ setTimeout(() => { document.getElementById('modeBtn').innerHTML = '🔁'; docume
   });
 })();
 
-function lookupWord(e, sentence) {
-  document.querySelectorAll('.pitch-popup').forEach(el => el.remove());
-  const isJapanese = /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]/.test(sentence);
-  if (isJapanese) { lookupJapanese(e, sentence); } else { lookupEnglish(sentence); }
+// 从句子行发起查词（读取行内文本，避免行内事件传参的转义问题）
+function lookupFromRow(e) {
+  const row = e.target.closest('.sentence-row');
+  if (!row) return;
+  const ja = row.querySelector('.sen-ja');
+  lookupWord(ja ? cleanRubyText(ja) : '');
 }
 
-async function lookupJapanese(e, sentence) {
+function lookupWord(sentence) {
+  document.querySelectorAll('.pitch-popup').forEach(el => el.remove());
+  const isJapanese = /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]/.test(sentence);
+  if (isJapanese) { lookupJapanese(sentence); } else { lookupEnglish(sentence); }
+}
+
+async function lookupJapanese(sentence) {
   let words = [];
   // 尝试 kuromoji（支持词形还原）
   if (typeof kuromoji !== 'undefined' && window._kuromojiTokenizer) {
@@ -2015,7 +2150,6 @@ async function lookupJapanese(e, sentence) {
         </span>
         <a href="https://jisho.org/search/${base ? baseEnc : enc}" target="_blank" class="md-btn md-btn-text md-btn-sm" style="font-size:11px">📖 Jisho</a>
         <a href="http://www.gavo.t.u-tokyo.ac.jp/ojad/search/index/word:${base ? baseEnc : enc}" target="_blank" class="md-btn md-btn-text md-btn-sm" style="font-size:11px">🔊 OJAD</a>
-        <a href="https://www2.nhk.or.jp/archives/movies/?id=D0009050005_00000" target="_blank" class="md-btn md-btn-text md-btn-sm" style="font-size:11px">📻 NHK</a>
       </div>`;
     }).join('')}
     <div style="margin-top:12px;font:var(--md-sys-typescale-label-small);color:var(--md-sys-color-on-surface-variant)">
@@ -2064,8 +2198,7 @@ document.addEventListener('mouseup', function(e) {
     popup.innerHTML = `
       <div class="popup-word">${escHtml(text)}</div>
       <a href="https://jisho.org/search/${enc}" target="_blank" rel="noopener">📖 Jisho 词典</a>
-      <a href="http://www.gavo.t.u-tokyo.ac.jp/ojad/search/index/word:${enc}" target="_blank" rel="noopener">🔊 OJAD 音调</a>
-      <a href="https://www2.nhk.or.jp/archives/movies/?id=D0009050005_00000" target="_blank" rel="noopener">📻 NHK 发音</a>`;
+      <a href="http://www.gavo.t.u-tokyo.ac.jp/ojad/search/index/word:${enc}" target="_blank" rel="noopener">🔊 OJAD 音调</a>`;
   } else {
     popup.innerHTML = `
       <div class="popup-word">${escHtml(text)}</div>
@@ -2114,8 +2247,8 @@ function renderContentWithRuby(content, ruby) {
 }
 
 function escHtml(s) {
-  if (!s) return '';
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  if (s === null || s === undefined || s === '') return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function escAttr(s) { return escHtml(s).replace(/'/g, '&#39;'); }
@@ -2157,11 +2290,21 @@ function hideSnackbar() {
 
 // Keyboard
 document.addEventListener('keydown', function(e) {
-  if (e.ctrlKey && e.key === 'a') {
-    if (document.activeElement === document.getElementById('searchInput')) return;
-    e.preventDefault(); toggleSelectAll();
+  if (e.key === 'Escape') { closeModal(); return; }
+  const tag = (document.activeElement && document.activeElement.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;   // 输入中不抢快捷键
+  if (e.ctrlKey && e.key === 'a') { e.preventDefault(); toggleSelectAll(); return; }
+  if (document.getElementById('modalOverlay').style.display !== 'none') return;
+  if (e.key === '/') {
+    const si = document.getElementById('searchInput');
+    if (!si.disabled) { e.preventDefault(); si.focus(); }
+  } else if (e.code === 'Space') {
+    e.preventDefault(); togglePlay();
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault(); skipPrev();
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault(); skipNext();
   }
-  if (e.key === 'Escape') closeModal();
 });
 
 // Search events
@@ -2173,6 +2316,9 @@ document.getElementById('searchScope').addEventListener('change', onSearch);
 (function() {
   const rail = document.getElementById('navRail');
   const resizer = document.getElementById('navResizer');
+  // 恢复上次的宽度
+  const savedW = parseInt(store.get('navw', '0'), 10);
+  if (savedW >= 60 && savedW <= 300) rail.style.width = savedW + 'px';
   let startX, startWidth;
   resizer.addEventListener('mousedown', (e) => {
     startX = e.clientX;
@@ -2188,6 +2334,7 @@ document.getElementById('searchScope').addEventListener('change', onSearch);
       resizer.classList.remove('active');
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
+      store.set('navw', rail.offsetWidth);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
     };
@@ -2196,7 +2343,7 @@ document.getElementById('searchScope').addEventListener('change', onSearch);
   });
 })();
 
-// 深浅色模式切换
+// 深浅色模式切换（三态：跟随系统 → 明/暗 → 跟随系统，选择会记住）
 function toggleTheme() {
   const html = document.documentElement;
   const current = html.getAttribute('data-theme');
@@ -2204,8 +2351,9 @@ function toggleTheme() {
   let next;
   if (!current) { next = prefersDark ? 'light' : 'dark'; }
   else if (current === 'dark') { next = 'light'; }
-  else { html.removeAttribute('data-theme'); updateThemeIcon(); return; }
+  else { html.removeAttribute('data-theme'); store.set('theme', ''); updateThemeIcon(); return; }
   html.setAttribute('data-theme', next);
+  store.set('theme', next);
   updateThemeIcon();
 }
 function updateThemeIcon() {
