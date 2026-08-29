@@ -511,19 +511,18 @@ body {
 
 .sentence-row .sen-content { flex: 1; }
 .sentence-row .sen-ja {
-  font-family: var(--font-ja); font-size: 15px; line-height: 2.5; margin-bottom: 2px;
+  font-family: var(--font-ja); font-size: 15px; line-height: 2.2; margin-bottom: 2px;
 }
-/* 自定义注音：rt 绝对定位悬浮在汉字上方，完全不参与排版，
-   因此不会像原生 ruby 那样把正文挤开或错位 */
-.sentence-row .sen-ja .rb {
-  position: relative; display: inline-block;
+/* 逐字原生 ruby：读音按字分配，浏览器自动为假名片预留宽度 → 永不重叠；
+   拆分均衡时（每字 1~2 假名）字距几乎无变化 */
+.sentence-row .sen-ja ruby {
+  ruby-position: over;
+  ruby-align: center;
 }
-.sentence-row .sen-ja .rb .rt {
-  position: absolute; left: 50%; transform: translateX(-50%);
-  bottom: calc(100% - .55em);
-  font-family: var(--font-ja); font-size: .55em; line-height: 1.3;
+.sentence-row .sen-ja rt {
+  font-family: var(--font-ja); font-size: .5em; line-height: 1.3;
   color: var(--md-sys-color-on-surface-variant);
-  text-align: center; white-space: nowrap;
+  text-align: center;
   pointer-events: none;
   user-select: none; -webkit-user-select: none;
 }
@@ -2481,52 +2480,61 @@ function rubyToBrackets(html) {
   return html.replace(/<ruby[^>]*>(.*?)<rt>(.*?)<\/rt><\/ruby>/g, '$1[$2]').replace(/<[^>]+>/g, '').trim();
 }
 
-// ===== 注音渲染：读音按拍拆分、逐字悬浮在对应汉字上方 =====
-// 背景：app 存的是整词注音（如 一朝一夕[いっちょういっせき]），整块居中会让
-// 假名和汉字对不上（错位）；逐字分配后每个汉字头上的假名与其对应，且
-// 绝对定位不参与排版，正文间距完全自然。
+// ===== 注音渲染：读音按拍拆分、逐字标记原生 ruby =====
+// 背景：app 存的是整词注音（如 一朝一夕[いっちょういっせき]），整块显示会让
+// 假名和汉字对不上（错位）。这里按比例把读音拆到每个汉字头上；用原生 ruby
+// 逐字标记，浏览器会为较宽的假名片预留宽度，因此相邻注音永不重叠。
 const SMALL_KANA = 'ぁぃぅぇぉっゃゅょゎァィゥェォッャュョ';
 const KANJI_RE = /[\u3400-\u4dbf\u4e00-\u9fff々]/;
 
-// 读音切拍：小書き仮名（ゃゅょっ等）并进前一拍
-function splitMorae(reading) {
-  const morae = [];
-  for (const ch of reading) {
-    if (morae.length && SMALL_KANA.includes(ch)) morae[morae.length - 1] += ch;
-    else morae.push(ch);
-  }
-  return morae;
-}
-
 // 把读音按比例分配到 base 的每个汉字：返回 [{char, rt}]
+// ① 先剪掉 base 首尾与读音重复的假名（お金[おかね]→金←かね、喋れる[しゃべれる]→喋←しゃべ+れる）
+// ② 按字符数比例切分读音，边界不落在小書き仮名上
 function distributeReading(base, reading) {
   const chars = [...base];
+  let r = [...reading];
   const isKanji = chars.map(c => KANJI_RE.test(c));
   const n = isKanji.filter(Boolean).length;
-  if (!n || !reading) return chars.map(c => ({ char: c, rt: '' }));
-  const morae = splitMorae(reading);
-  const m = morae.length;
-  if (!m) return chars.map(c => ({ char: c, rt: '' }));
-  const perKanji = [];
-  let consumed = 0;
-  for (let k = 0; k < n; k++) {
-    const take = Math.round((k + 1) * m / n) - Math.round(k * m / n);
-    perKanji.push(morae.slice(consumed, consumed + take).join(''));
-    consumed += take;
+  if (!n || r.length === 0) return chars.map(c => ({ char: c, rt: '' }));
+
+  // 剪尾部假名：base 末尾连续假名与读音末尾相同时，读音只保留给汉字的部分
+  let tailKana = 0;
+  for (let i = chars.length - 1; i >= 0 && !KANJI_RE.test(chars[i]); i--) tailKana++;
+  if (tailKana && tailKana < r.length &&
+      r.slice(-tailKana).join('') === chars.slice(-tailKana).join('')) {
+    r = r.slice(0, r.length - tailKana);
   }
-  if (consumed < m) perKanji[n - 1] += morae.slice(consumed).join('');
+  // 剪头部假名
+  let headKana = 0;
+  for (let i = 0; i < chars.length && !KANJI_RE.test(chars[i]); i++) headKana++;
+  if (headKana && headKana < r.length &&
+      r.slice(0, headKana).join('') === chars.slice(0, headKana).join('')) {
+    r = r.slice(headKana);
+  }
+
+  const m = r.length;
+  if (m === 0) return chars.map(c => ({ char: c, rt: '' }));
+  const perKanji = [];
+  let prev = 0;
+  for (let k = 1; k <= n; k++) {
+    let b = k === n ? m : Math.round(m * k / n);
+    while (b < m && b > prev && SMALL_KANA.includes(r[b])) b--;   // 小假名跟前一字
+    if (b <= prev) b = Math.min(prev + 1, m);
+    perKanji.push(r.slice(prev, b).join(''));
+    prev = b;
+  }
   let ki = 0;
   return chars.map(c => KANJI_RE.test(c)
     ? { char: c, rt: perKanji[ki++] || '' }
     : { char: c, rt: '' });
 }
 
-// 将 漢字[かんじ] 格式转为逐字悬浮注音 HTML
+// 将 漢字[かんじ] 格式转为逐字原生 ruby
 function bracketsToRuby(text) {
   if (!text) return '';
   return text.replace(/([^\]]+?)\[([^\]]+)\]/g, (m, base, reading) =>
     distributeReading(base, reading).map(({ char, rt }) =>
-      rt ? `<span class="rb">${escHtml(char)}<span class="rt">${escHtml(rt)}</span></span>` : escHtml(char)
+      rt ? `<ruby>${escHtml(char)}<rt>${escHtml(rt)}</rt></ruby>` : escHtml(char)
     ).join('')
   );
 }
