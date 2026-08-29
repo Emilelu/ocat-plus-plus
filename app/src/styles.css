@@ -156,6 +156,9 @@ body {
   height: 100vh; overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
+/* React 挂载点：撑满 body，让 .main 的高度约束生效
+   （列表可滚动 / 侧栏占满 / 播放条贴底都依赖这一层） */
+#root { height: 100%; }
 
 /* ============================================================
    Top App Bar

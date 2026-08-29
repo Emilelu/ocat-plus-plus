@@ -1,14 +1,14 @@
 // 数据库与缓存层（sql.js + IndexedDB，逻辑与 legacy 一致）
 import initSqlJs from 'sql.js';
-// eslint-disable-next-line
-import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
+import wasmB64 from './sql-wasm.b64.js';
 import { rubyToBrackets } from './text.js';
 
 let SQL = null;
 export async function ensureSql() {
   if (!SQL) {
-    const res = await fetch(wasmUrl);
-    SQL = await initSqlJs({ wasmBinary: await res.arrayBuffer() });
+    // 直接解码内联的 base64，file:// 下零网络请求
+    const bytes = Uint8Array.from(atob(wasmB64), c => c.charCodeAt(0));
+    SQL = await initSqlJs({ wasmBinary: bytes });
   }
   return SQL;
 }
