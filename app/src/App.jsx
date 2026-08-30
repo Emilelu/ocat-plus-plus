@@ -17,19 +17,12 @@ import {
   buildAnkiCsv, buildCsv, buildTxt, buildConvAnkiCsv, downloadFile,
 } from './lib/export.js';
 import { SentenceEditModal, NewCollectionModal } from './EditModals.jsx';
+import { PAGE_SIZES, MODAL_TITLES, matchSentence, syncCmd, pageRange } from './lib/view.js';
+import { ConvCard, SentenceRow } from './components/ConvCard.jsx';
+import { ConvModal, LookupModal, ImportModal, SyncHelpModal, ConfirmModal } from './components/Modals.jsx';
+import { SelectionPopup } from './components/SelectionPopup.jsx';
 
 marked.setOptions({ breaks: true, gfm: true });
-
-const PAGE_SIZES = [25, 50, 100, 200];
-
-function matchSentence(s, conv, keyword, field) {
-  if (field === 'all') return (s.content + s.translation + conv.userQuestion + conv.aiAnswer).toLowerCase().includes(keyword);
-  if (field === 'content') return s.content.toLowerCase().includes(keyword);
-  if (field === 'translation') return s.translation.toLowerCase().includes(keyword);
-  if (field === 'question') return conv.userQuestion.toLowerCase().includes(keyword);
-  if (field === 'answer') return conv.aiAnswer.toLowerCase().includes(keyword);
-  return false;
-}
 
 export default function App() {
   // ===== 数据 =====
@@ -58,6 +51,7 @@ export default function App() {
   const [activeSec, setActiveSec] = useState(0);
   const [noMotion, setNoMotion] = useState(false);
   const [scrollTick, setScrollTick] = useState(0);
+  const [playScrollTick, setPlayScrollTick] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSizeState] = useState(() => parseInt(store.get('pagesize', '50'), 10) || 50);
   const [navSearch, setNavSearch] = useState('');
@@ -83,6 +77,7 @@ export default function App() {
   const convListRef = useRef(null);
   const searchInputRef = useRef(null);
   const pendingSecRef = useRef(null);
+  const pendingPlaySidRef = useRef(null);
   const scrollLoopTokenRef = useRef(0);
   const settlingRef = useRef(false);   // 跳转校正期间挂起滚动高亮判定
 
@@ -115,6 +110,10 @@ export default function App() {
           if (item.secId != null && collapsedSecsRef.current.has(item.secId)) {
             setCollapsedSecs(prev => { const n = new Set(prev); n.delete(item.secId); return n; });
           }
+          // 自动滚动到正在朗读的句子（居中）；由 playScrollTick 在提交后执行
+          pendingPlaySidRef.current = item.sid;
+          setNoMotion(true);
+          setPlayScrollTick(t => t + 1);
         }
       },
     });
@@ -365,6 +364,40 @@ export default function App() {
     };
     step();
   }, [scrollTick]);
+
+  // 播放自动滚动：把正在朗读的句子滚到列表居中位置。
+  // 同样受两阶段布局与（可能的）跨页切换影响，故沿用 no-motion + 逐帧校正；
+  // no-motion 同时让"自动展开对话卡片"瞬时完成，避免 400ms 展开动画期间测不准。
+  useLayoutEffect(() => {
+    if (!pendingPlaySidRef.current) return;
+    const sid = pendingPlaySidRef.current;
+    pendingPlaySidRef.current = null;
+    const token = ++scrollLoopTokenRef.current;
+    const esc = (window.CSS && CSS.escape) ? CSS.escape(sid) : sid;
+    let frames = 0, stable = 0, lastTarget = null;
+    const step = () => {
+      if (scrollLoopTokenRef.current !== token) return;   // 已被更新的跳转/播放取代
+      const list = convListRef.current;
+      const el = list && list.querySelector(`.sentence-row[data-sid="${esc}"]`);
+      if (list && el) {
+        const lr = list.getBoundingClientRect(), er = el.getBoundingClientRect();
+        // 目标只由布局决定、与当前 scrollTop 无关（er.top 会随滚动同步移动），
+        // 因此用"目标值是否稳定"来判断布局是否稳定，可与平滑滚动动画共存。
+        const target = list.scrollTop + (er.top - lr.top) - (lr.height - er.height) / 2;
+        if (lastTarget === null || Math.abs(target - lastTarget) > 2) {
+          list.scrollTo({ top: target, behavior: 'smooth' });
+          stable = 0;
+        } else {
+          stable++;
+        }
+        lastTarget = target;
+      }
+      frames++;
+      if (stable < 2 && frames < 12) requestAnimationFrame(step);
+      else setNoMotion(false);
+    };
+    step();
+  }, [playScrollTick]);
 
   // 播放列表：与分页页码对齐
   useMemo(() => {
@@ -1071,7 +1104,7 @@ export default function App() {
         <div className={'modal-scrim' + (modalClosing ? ' closing' : '')} onMouseDown={e => { if (e.target === e.currentTarget) closeModal(); }}>
           <div className="modal-dialog">
             <div className="modal-header">
-              <h3>{modalTitles[modal.type] || '详情'}</h3>
+              <h3>{MODAL_TITLES[modal.type] || '详情'}</h3>
               <button className="modal-close" onClick={closeModal} title="关闭 (Esc)"><span className="mi">close</span></button>
             </div>
             <div className="modal-body" id="modalBody">
@@ -1098,17 +1131,6 @@ export default function App() {
     if (view.cross) return `${view.convs.length} 个对话`;
     if (sectioned) return `${sectioned.length} 分栏 · ${view.convs.reduce((s, c) => s + c.sentences.length, 0)} 句`;
     return `${view.convs.length} 对话 · ${view.convs.reduce((s, c) => s + c.sentences.length, 0)} 句`;
-  }
-  function pageRange(page, total) {
-    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-    let start = Math.max(1, page - 3);
-    let end = Math.min(total, start + 6);
-    start = Math.max(1, end - 6);
-    const pages = [];
-    if (start > 1) { pages.push(1); if (start > 2) pages.push('...'); }
-    for (let i = start; i <= end; i++) pages.push(i);
-    if (end < total) { if (end < total - 1) pages.push('...'); pages.push(total); }
-    return pages;
   }
   function jumpToSection(si) {
     const secId = 'sec-' + si;
@@ -1164,233 +1186,4 @@ export default function App() {
       onDeleteConv: deleteConv,
     };
   }
-}
-
-const modalTitles = { conv: '对话详情', lookup: '分词查词', import: '导入收藏夹', synchelp: '同步服务未启动', edit: '编辑句子', add: '添加到收藏夹', newcol: '新建收藏夹', confirm: '确认删除' };
-
-function syncCmd() {
-  const dir = decodeURIComponent(window.location.href.replace('/index.html', '').replace('file:///', ''));
-  return `cmd /c "cd /d ${dir} && python sync_server.py"`;
-}
-
-// ===== 对话卡片 =====
-function ConvCard({ conv, colTitle, state }) {
-  const isExpanded = state.expanded.has(conv.messageId);
-  const isSelected = state.selConvs.has(conv.messageId);
-  const summary = stripMarkdown(conv.aiSummary || '');
-  const modelShort = (conv.model || '').substring(0, 20);
-  return (
-    <div className={'conv-card' + (isExpanded ? ' expanded' : '') + (isSelected ? ' selected' : '')} data-msg-id={conv.messageId}>
-      <div className="conv-card-header" onClick={() => state.onToggleConv(conv.messageId)}>
-        <input type="checkbox" className="md-checkbox" checked={isSelected} title="勾选导出"
-               onClick={e => e.stopPropagation()}
-               onChange={e => state.onToggleConvSelect(conv.messageId, e.target.checked)} />
-        <div className="conv-card-body">
-          {colTitle ? <div className="collection-badge"><span className="mi" style={{ fontSize: 12 }}>folder</span> {escHtml(colTitle)}</div> : null}
-          <div className="conv-question">{conv.userQuestion || '(无用户提问)'}</div>
-          {summary ? <div className="conv-summary">{summary}</div> : null}
-          <div className="conv-card-meta">
-            <span>{conv.sentences.length} 句</span>
-            {modelShort ? <span className="sen-tag">{modelShort}</span> : ''}
-          </div>
-        </div>
-        <div className="conv-card-actions">
-          <button className="md-btn md-btn-text md-btn-sm" onClick={e => { e.stopPropagation(); state.onView(conv.messageId); }} title="查看对话原文"><span className="mi">article</span>原文</button>
-          <button className="md-btn md-btn-text md-btn-sm" onClick={e => { e.stopPropagation(); state.onExportConv(conv.messageId); }} title="导出该对话为 Anki CSV"><span className="mi">file_download</span></button>
-          <button className="md-btn md-btn-text md-btn-sm" onClick={e => { e.stopPropagation(); state.onDeleteConv(conv.messageId); }} title="删除该对话"><span className="mi">delete_outline</span></button>
-        </div>
-      </div>
-      <div className="conv-sentences"><div className="conv-sentences-inner">
-        {conv.sentences.filter(s => s.type !== 'section').map(s => (
-          <SentenceRow key={s.id} s={s} state={state} convId={conv.messageId} />
-        ))}
-      </div></div>
-    </div>
-  );
-}
-
-function SentenceRow({ s, state }) {
-  const isPlaying = state.playingSid != null && String(state.playingSid) === String(s.id);
-  return (
-    <div className={'sentence-row' + (isPlaying ? ' playing' : '')}
-         onClick={() => state.onRowClick(s)}>
-      <input type="checkbox" className="md-checkbox" checked={state.selSens.has(s.id)} title="勾选导出"
-             onClick={e => e.stopPropagation()}
-             onChange={e => state.onToggleSenSelect(s.id, e.target.checked)} />
-      <div className="sen-content">
-        <div className="sen-ja" dangerouslySetInnerHTML={{ __html: renderContentWithRuby(s.content, s.ruby) }} />
-        <div className="sen-zh">{s.translation}</div>
-        <div className="sen-tags">{s.tags ? <span className="sen-tag">{s.tags}</span> : null}</div>
-      </div>
-      <span className={'sen-lookup sen-mastered' + (s.isMastered ? ' on' : '')} title={s.isMastered ? '取消已掌握' : '标记为已掌握'}
-            onClick={e => { e.stopPropagation(); state.onMastered(s.id); }}>
-        <span className="mi">{s.isMastered ? 'check_circle' : 'radio_button_unchecked'}</span>
-      </span>
-      <span className="sen-lookup" title="分词查词典" onClick={e => { e.stopPropagation(); state.onLookup(s); }}><span className="mi">menu_book</span></span>
-      <span className="sen-lookup" title="只读这一句" onClick={e => { e.stopPropagation(); state.onSpeakOnce(s); }}><span className="mi">volume_up</span></span>
-      <span className="sen-lookup" title="编辑句子" onClick={e => { e.stopPropagation(); state.onEdit(s); }}><span className="mi">edit_note</span></span>
-      <span className="sen-lookup" title="删除句子" onClick={e => { e.stopPropagation(); state.onDeleteSentence(s.id); }}><span className="mi">delete_outline</span></span>
-    </div>
-  );
-}
-
-// ===== 模态框内容 =====
-function ConvModal({ conv, onCopy }) {
-  const mdHtml = marked.parse(preprocessLangBlocks(conv.aiAnswer));
-  return (
-    <>
-      <div className="user-q">
-        <div className="label">👤 用户提问</div>
-        {escHtml(conv.userQuestion || '(无)')}
-      </div>
-      <div className="md-content">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-          <div className="label" style={{ font: 'var(--md-sys-typescale-label-small)', opacity: .7 }}>🤖 AI 回复</div>
-          <button className="md-btn md-btn-text md-btn-sm" onClick={() => onCopy(conv)}><span className="mi">content_copy</span>复制全文</button>
-        </div>
-        <div dangerouslySetInnerHTML={{ __html: mdHtml }} />
-      </div>
-    </>
-  );
-}
-
-function LookupModal({ modal }) {
-  return (
-    <>
-      <div style={{ font: 'var(--md-sys-typescale-label-small)', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: 12 }}>
-        点击单词跳转词典 · 也可以手动划选句子中的文字
-      </div>
-      {modal.words.map(({ word, base }, i) => {
-        const enc = encodeURIComponent(word);
-        const links = modal.jp ? dictLinks(base || word) : dictLinksEn(word);
-        return (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid var(--md-sys-color-outline-variant)' }}>
-            <span style={{ fontFamily: 'var(--font-ja)', fontSize: 16, flex: 1 }}>
-              {word}{base ? <span style={{ fontSize: 12, color: 'var(--md-sys-color-on-surface-variant)' }}> ← {base}</span> : null}
-            </span>
-            {links.map(l => (
-              <a key={l.label} href={l.href} target="_blank" rel="noopener" className="md-btn md-btn-text md-btn-sm" style={{ fontSize: 11 }}>
-                <span className="mi" style={{ fontSize: 14 }}>{l.icon}</span>{l.label}
-              </a>
-            ))}
-          </div>
-        );
-      })}
-    </>
-  );
-}
-
-function ImportModal({ modal, onConfirm, onClose }) {
-  return (
-    <div style={{ padding: 0 }}>
-      <div style={{ font: 'var(--md-sys-typescale-title-medium)', marginBottom: 12 }}>选择要导入的收藏夹</div>
-      {modal.rows.map((r, i) => (
-        <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', cursor: 'pointer' }}>
-          <input type="checkbox" className="md-checkbox" defaultChecked data-id={r.id} />
-          <span>{r.title} <span style={{ color: 'var(--md-sys-color-on-surface-variant)', fontSize: 12 }}>{r.lang || ''} {r.translationLang ? '→ ' + r.translationLang : ''}</span></span>
-        </label>
-      ))}
-      <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
-        <button className="md-btn md-btn-filled" onClick={onConfirm}>确认导入</button>
-        <button className="md-btn md-btn-text" onClick={onClose}>取消</button>
-      </div>
-    </div>
-  );
-}
-
-function SyncHelpModal({ onCopy, onClose }) {
-  return (
-    <div style={{ textAlign: 'center', padding: 16 }}>
-      <div style={{ fontSize: 48, marginBottom: 12 }}><span className="mi" style={{ fontSize: 48 }}>smartphone</span></div>
-      <div style={{ font: 'var(--md-sys-typescale-title-medium)', marginBottom: 8 }}>同步服务未启动</div>
-      <div style={{ font: 'var(--md-sys-typescale-body-medium)', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: 12 }}>请在新终端运行以下命令：</div>
-      <div style={{ background: 'var(--md-sys-color-surface-container)', padding: '10px 14px', borderRadius: 8, fontFamily: 'Consolas, monospace', fontSize: 13, marginBottom: 12, textAlign: 'left', userSelect: 'all' }}>{syncCmd()}</div>
-      <button className="md-btn md-btn-filled" onClick={() => { onCopy(); onClose(); }}>📋 复制</button>
-      <button className="md-btn md-btn-text" onClick={onClose} style={{ marginLeft: 8 }}>关闭</button>
-    </div>
-  );
-}
-
-function ConfirmModal({ message, onConfirm, onCancel }) {
-  return (
-    <div style={{ textAlign: 'center', padding: 8 }}>
-      <div style={{ fontSize: 40, marginBottom: 12, color: 'var(--md-sys-color-error)' }}><span className="mi" style={{ fontSize: 40 }}>warning</span></div>
-      <div style={{ font: 'var(--md-sys-typescale-body-medium)', marginBottom: 20, whiteSpace: 'pre-wrap' }}>{message}</div>
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-        <button className="md-btn md-btn-text" onClick={onCancel}>取消</button>
-        <button className="md-btn md-btn-filled" style={{ background: 'var(--md-sys-color-error)' }} onClick={onConfirm}>删除</button>
-      </div>
-    </div>
-  );
-}
-
-// ===== 划词弹框（状态机，防复现）=====
-function SelectionPopup({ onLookUp }) {
-  const [popup, setPopup] = useState(null);   // {text, jp, x, y}
-  const popupRef = useRef(null);
-  const suppressRef = useRef(false);
-  const closedTextRef = useRef('');
-  popupRef.current = popup;
-
-  useEffect(() => {
-    const close = () => setPopup(null);
-    const onMousedown = (e) => {
-      const el = document.querySelector('.pitch-popup');
-      if (el) {
-        if (!el.contains(e.target)) {
-          closedTextRef.current = (window.getSelection() ? window.getSelection().toString() : '').trim();
-          close();
-          suppressRef.current = true;
-        }
-      } else {
-        suppressRef.current = false;
-      }
-    };
-    const onMouseup = (e) => {
-      const zone = e.target.closest && (e.target.closest('.sentence-row') || e.target.closest('#modalBody'));
-      if (!zone) return;
-      const sel = window.getSelection();
-      const text = sel ? sel.toString().trim() : '';
-      if (!text || text.length > 30) return;
-      if (suppressRef.current) {
-        suppressRef.current = false;
-        if (text === closedTextRef.current) return;
-      }
-      const jp = /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]/.test(text);
-      // html zoom 会放大布局坐标，而 clientX/Y 是未缩放视口坐标，需要反除对齐
-      const z = parseFloat(document.documentElement.style.zoom) || 1;
-      setPopup({
-        text, jp,
-        x: Math.min(e.clientX / z, window.innerWidth / z - 220),
-        y: Math.min((e.clientY + 8) / z, window.innerHeight / z - 180),
-        fixed: !!e.target.closest('#modalBody'),
-      });
-    };
-    document.addEventListener('mousedown', onMousedown);
-    document.addEventListener('mouseup', onMouseup);
-    return () => {
-      document.removeEventListener('mousedown', onMousedown);
-      document.removeEventListener('mouseup', onMouseup);
-    };
-  }, []);
-
-  useEffect(() => {
-    const list = document.querySelector('.scroll-list');
-    if (!list) return;
-    const close = () => setPopup(null);
-    list.addEventListener('scroll', close);
-    return () => list.removeEventListener('scroll', close);
-  }, []);
-
-  if (!popup) return null;
-  const enc = encodeURIComponent(popup.text);
-  const links = popup.jp ? dictLinks(popup.text).map(l => ({ ...l, label: l.label === 'Jisho' ? 'Jisho 词典' : 'OJAD 音调' })) : dictLinksEn(popup.text);
-  return (
-    <div className="pitch-popup" style={{ position: popup.fixed ? 'fixed' : 'absolute', top: popup.y, left: popup.x }}>
-      <div className="popup-word">{escHtml(popup.text)}</div>
-      {links.map(l => (
-        <a key={l.label} href={l.href} target="_blank" rel="noopener"><span className="mi" style={{ fontSize: 16 }}>{l.icon}</span>{l.label}</a>
-      ))}
-    </div>
-  );
 }
