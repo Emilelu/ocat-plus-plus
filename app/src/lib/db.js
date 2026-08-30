@@ -1,7 +1,7 @@
 // 数据库与缓存层（sql.js + IndexedDB，逻辑与 legacy 一致）
 import initSqlJs from 'sql.js';
 import wasmB64 from './sql-wasm.b64.js';
-import { rubyToBrackets } from './text.js';
+import { rubyToBrackets, distributeReading } from './text.js';
 
 let SQL = null;
 export async function ensureSql() {
@@ -87,7 +87,8 @@ export function loadAllData(db) {
       colMap[clid].conversations = allItems.map(it => it.conv);
     }
   }
-  return Object.values(colMap).filter(c => c.hasSections ? c.sections?.length : c.conversations?.length);
+  // 管理端：保留空收藏夹（新建后尚未添加句子也可见）
+  return Object.values(colMap);
 }
 
 export function allConvs(col) {
@@ -149,4 +150,92 @@ export async function syncFromPhoneApi() {
     throw new Error(err.error || '未知错误');
   }
   return resp.arrayBuffer();
+}
+
+// ===== 写功能（编辑/删除/新建）=====
+export function uuid() {
+  return crypto.randomUUID ? crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
+}
+
+// 漢字[かんじ] 括号格式 → app 数据库使用的 HTML ruby（与原始库一致：逐字保留假名、汉字按词分组）
+export function bracketsToRubyHtml(text) {
+  if (!text) return null;
+  let out = '';
+  let hasRuby = false;
+  let i = 0;
+  while (i < text.length) {
+    const open = text.indexOf('[', i);
+    if (open === -1) { out += plainRubyChars(text.slice(i)); break; }
+    const close = text.indexOf(']', open);
+    if (close === -1) { out += plainRubyChars(text.slice(i)); break; }
+    const base = text.slice(i, open);            // 可能含前导假名
+    const reading = text.slice(open + 1, close);
+    // 用 distributeReading 拆出前导假名（无注音）与汉字（按拍分配读音），再按连续汉字合并为词
+    const parts = distributeReading(base, reading);
+    let buf = '', bufRt = '';
+    const flush = () => { if (buf) { out += `<ruby>${buf}<rt>${bufRt}</rt></ruby>`; buf = ''; bufRt = ''; } };
+    for (const { char, rt } of parts) {
+      if (rt) { buf += char; bufRt += rt; }
+      else { flush(); out += `<ruby>${char}</ruby>`; }
+    }
+    flush();
+    hasRuby = true;
+    i = close + 1;
+  }
+  return hasRuby ? out : null;
+}
+
+function plainRubyChars(s) {
+  let o = '';
+  for (const ch of s) o += `<ruby>${ch}</ruby>`;
+  return o;
+}
+
+function nextIndex(db, collectionListId) {
+  const stmt = db.prepare('SELECT MAX("index") AS m FROM Collection WHERE collectionListId = ?');
+  stmt.bind([collectionListId]);
+  stmt.step();
+  const m = stmt.getAsObject().m;
+  stmt.free();
+  return (m === null || m === undefined ? 0 : m) + 1;
+}
+
+export function maxCollectionIndex(db) {
+  const stmt = db.prepare('SELECT MAX("index") AS m FROM CollectionList');
+  stmt.step();
+  const m = stmt.getAsObject().m;
+  stmt.free();
+  return (m === null || m === undefined ? 0 : m) + 1;
+}
+
+export function insertCollectionList(db, { id, title, lang, index }) {
+  const now = Date.now();
+  db.run(`INSERT INTO CollectionList (id, title, icon, summary, tags, "index", deleted, deletedAt, createdAt, updatedAt, syncState, isPublic, shareId, lang, translationLang, isCopied)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [id, title, null, '', null, index, 0, 0, now, now, 0, 0, null, lang || null, null, 0]);
+}
+
+export function insertSentence(db, { id, collectionListId, content, translation, tags, ruby, lang, type, messageId = null }) {
+  db.run(`INSERT INTO Collection (id, content, translation, lang, ruby, "index", tags, collectionListId, messageId, deleted, deletedAt, createdAt, updatedAt, syncState, ttsKey, translationLang, type, hasSyncedTts, isTtsUploaded, isMastered, isCopied, ttsTone, ttsVoice)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [id, content, translation || null, lang || 'ja', ruby || null, nextIndex(db, collectionListId), tags || null,
+     collectionListId, messageId, 0, 0, Date.now(), Date.now(), 0, null, null, type || null, 0, 0, 0, 0, null, null]);
+}
+
+export function updateSentence(db, sid, { content, translation, tags, ruby }) {
+  db.run('UPDATE Collection SET content=?, translation=?, tags=?, ruby=?, updatedAt=? WHERE id=?',
+    [content, translation || null, tags || null, ruby || null, Date.now(), sid]);
+}
+
+export function deleteSentenceDb(db, sid) {
+  db.run('UPDATE Collection SET deleted=1, deletedAt=?, updatedAt=? WHERE id=?', [Date.now(), Date.now(), sid]);
+}
+
+export function deleteConvDb(db, mid, collectionListId) {
+  db.run('UPDATE Collection SET deleted=1, deletedAt=?, updatedAt=? WHERE messageId=? AND collectionListId=?',
+    [Date.now(), Date.now(), mid, collectionListId]);
 }

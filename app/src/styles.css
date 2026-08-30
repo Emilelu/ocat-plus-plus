@@ -374,7 +374,9 @@ body {
 }
 
 /* Scrollable list */
-.scroll-list { flex: 1; overflow-y: auto; padding: 8px 16px; }
+.scroll-list { flex: 1; overflow-y: auto; padding: 8px 16px; overflow-anchor: none; }
+/* 分栏跳转期间禁用过渡，避免测量时布局仍在位移导致滚偏 */
+.scroll-list.no-motion, .scroll-list.no-motion * { transition: none !important; }
 
 /* Playback Bar */
 .playback-bar {

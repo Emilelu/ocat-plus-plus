@@ -5,3 +5,5 @@ __pycache__/
 # React 工程与构建中间产物
 node_modules/
 app/dist/
+# 工具工作目录（agent 记忆/日志，非项目源码）
+.workbuddy/

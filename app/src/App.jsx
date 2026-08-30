@@ -1,10 +1,12 @@
-import React, { useState, useRef, useMemo, useEffect, useCallback, useDeferredValue } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useLayoutEffect, useCallback, useDeferredValue } from 'react';
 import { marked } from 'marked';
 
 import { store } from './lib/store.js';
 import {
   parseDb, loadAllData, allConvs, findConvAnywhere, cacheData, loadCached,
   toggleMasteredDb, syncFromPhoneApi,
+  uuid, bracketsToRubyHtml, insertCollectionList, insertSentence,
+  updateSentence, deleteSentenceDb, deleteConvDb, maxCollectionIndex,
 } from './lib/db.js';
 import { escHtml, escAttr, stripMarkdown, renderContentWithRuby, cleanRubyText, preprocessLangBlocks } from './lib/text.js';
 import { createSpeech } from './lib/speech.js';
@@ -14,6 +16,7 @@ import {
   dateStamp, exportFileBase, getSelectedSentences,
   buildAnkiCsv, buildCsv, buildTxt, buildConvAnkiCsv, downloadFile,
 } from './lib/export.js';
+import { SentenceEditModal, NewCollectionModal } from './EditModals.jsx';
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -52,6 +55,9 @@ export default function App() {
   const [selSens, setSelSens] = useState(() => new Set());
   const [expanded, setExpanded] = useState(() => new Set());
   const [collapsedSecs, setCollapsedSecs] = useState(() => new Set());
+  const [activeSec, setActiveSec] = useState(0);
+  const [noMotion, setNoMotion] = useState(false);
+  const [scrollTick, setScrollTick] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSizeState] = useState(() => parseInt(store.get('pagesize', '50'), 10) || 50);
   const [navSearch, setNavSearch] = useState('');
@@ -76,6 +82,9 @@ export default function App() {
   const snackTimer = useRef(null);
   const convListRef = useRef(null);
   const searchInputRef = useRef(null);
+  const pendingSecRef = useRef(null);
+  const scrollLoopTokenRef = useRef(0);
+  const settlingRef = useRef(false);   // 跳转校正期间挂起滚动高亮判定
 
   const showSnack = useCallback((msg, success) => {
     setSnack({ msg, success: !!success });
@@ -203,7 +212,10 @@ export default function App() {
     setSearchKw(''); setSearchScope('current');
     setSelConvs(new Set()); setSelSens(new Set());
     setExpanded(new Set()); setCollapsedSecs(new Set());
-    setPage(1); setPlayingIdx(-1);
+    setPage(1); setPlayingIdx(-1); setActiveSec(0);
+    scrollLoopTokenRef.current++;   // 终止进行中的跳转校正循环
+    settlingRef.current = false;
+    convListRef.current?.scrollTo({ top: 0 });
     speech.stop(); speech.reset();
     const col = dataRef.current[idx];
     if (col) {
@@ -305,6 +317,54 @@ export default function App() {
   const totalPages = Math.max(1, Math.ceil(flatItems.length / pageSize));
   const safePage = Math.min(page, totalPages);
   useEffect(() => { if (page !== safePage) setPage(safePage); }, [page, safePage]);
+
+  // 分栏跳转：等待状态提交（展开/切页）完成后，在 .scroll-list 内定位到目标分栏。
+  // 新页首挂载存在两阶段布局（grid fr + 逐字 ruby 首测偏小，次帧才稳定），
+  // 且 Chrome 滚动锚定会私改 scrollTop 与程序滚动打架（表现为"来回跳"）。
+  // 对策：overflow-anchor: none + 逐帧校正，直到"位置无漂移且 scrollHeight 不再变化"连续 2 帧，
+  // 期间保持 no-motion 并挂起滚动高亮判定；上限 20 帧防呆。令牌保证新跳转立即取代旧循环。
+  // 落点高亮直接以目标分栏为准：目标贴近本页内容末尾时 scrollTop 会被 maxScroll 截断、
+  // 分栏头无法置顶，若按"顶边压线"回算会误判成上一栏（表现为"滚一点才更新"）。
+  useLayoutEffect(() => {
+    if (!pendingSecRef.current) return;
+    const id = pendingSecRef.current;
+    const si = parseInt(id.replace('sec-', ''), 10);
+    pendingSecRef.current = null;
+    const token = ++scrollLoopTokenRef.current;
+    let frames = 0, stable = 0, lastTop = -1, lastH = -1;
+    const step = () => {
+      if (scrollLoopTokenRef.current !== token) return;   // 已被更新的跳转取代
+      const list = convListRef.current;
+      const el = document.getElementById(id);
+      if (list && el) {
+        const target = list.scrollTop + (el.getBoundingClientRect().top - list.getBoundingClientRect().top);
+        const h = list.scrollHeight;
+        if (Math.abs(list.scrollTop - target) > 1) {
+          list.scrollTo({ top: target });
+          stable = 0;
+        } else if (Math.abs(list.scrollTop - lastTop) <= 1 && Math.abs(h - lastH) <= 1) {
+          stable++;
+        } else {
+          stable = 0;
+        }
+        lastH = h;
+      }
+      lastTop = list ? list.scrollTop : -1;
+      frames++;
+      if (stable < 2 && frames < 20) {
+        requestAnimationFrame(step);
+      } else {
+        setActiveSec(si);
+        // 多挡一帧再恢复滚动判定：吞掉最后一条程序滚动事件，避免其按顶边压线回算覆盖目标高亮；
+        // 若期间又发起新跳转（令牌已变），由新跳转自行管理
+        requestAnimationFrame(() => {
+          if (scrollLoopTokenRef.current === token) settlingRef.current = false;
+        });
+        setNoMotion(false);
+      }
+    };
+    step();
+  }, [scrollTick]);
 
   // 播放列表：与分页页码对齐
   useMemo(() => {
@@ -524,6 +584,114 @@ export default function App() {
     masteredCacheTimer.current = setTimeout(() => cacheData(dataRef.current, dbRef.current, dbFileName, true), 3000);
   }, [dbFileName, showSnack]);
 
+  // ===== 写功能：编辑 / 删除 / 添加 / 新建收藏夹 =====
+  const confirmActionRef = useRef(null);
+
+  const afterWrite = useCallback((msg) => {
+    dataRef.current = loadAllData(dbRef.current);
+    bumpData();
+    setDbDirty(true);
+    showSnack(msg, true);
+    clearTimeout(masteredCacheTimer.current);
+    masteredCacheTimer.current = setTimeout(() => cacheData(dataRef.current, dbRef.current, dbFileName, true), 2000);
+  }, [dbFileName, showSnack]);
+
+  // 统一字段：注音（完整句子 + 漢字[かんじ]）存在时，正文以其去括号结果为准，保证显示/搜索/导出一致
+  const normalizeFields = useCallback((fields) => {
+    const ruby = (fields.ruby || '').trim();
+    if (ruby) {
+      return {
+        content: ruby.replace(/\[[^\]]*\]/g, ''),
+        translation: (fields.translation || '').trim(),
+        tags: (fields.tags || '').trim(),
+        ruby: bracketsToRubyHtml(ruby),
+      };
+    }
+    return {
+      content: (fields.content || '').trim(),
+      translation: (fields.translation || '').trim(),
+      tags: (fields.tags || '').trim(),
+      ruby: null,
+    };
+  }, []);
+
+  const saveSentenceEdit = useCallback((sid, fields) => {
+    if (!dbRef.current) return;
+    updateSentence(dbRef.current, sid, normalizeFields(fields));
+    afterWrite('已保存修改，记得点击 💾 保存');
+  }, [afterWrite, normalizeFields]);
+
+  const addSentence = useCallback((type, fields) => {
+    const col = dataRef.current[curColIdx];
+    if (!col || !dbRef.current) return;
+    const isSection = type === 'section';
+    const nf = normalizeFields(fields);
+    const mid = isSection ? null : uuid();   // 普通句子单独成对话，分栏 messageId 为 null（与原始库一致）
+    insertSentence(dbRef.current, {
+      id: uuid(), collectionListId: col.id, messageId: mid,
+      content: nf.content, translation: nf.translation, tags: nf.tags, ruby: nf.ruby,
+      lang: col.lang || 'ja', type: isSection ? 'section' : null,
+    });
+    if (mid) setExpanded(prev => { const n = new Set(prev); n.add(mid); return n; });
+    afterWrite(isSection ? '已添加分栏，记得点击 💾 保存' : '已添加句子，记得点击 💾 保存');
+  }, [curColIdx, afterWrite, normalizeFields]);
+
+  const confirmDelete = useCallback((message, action) => {
+    confirmActionRef.current = action;
+    setModal({ type: 'confirm', message });
+  }, []);
+
+  const deleteSentence = useCallback((sid) => {
+    if (!dbRef.current) return;
+    confirmDelete('确定删除该句子吗？（💾 保存后才会从文件移除）', () => {
+      const cur = playlistRef.current[playingIdx];
+      if (cur && String(cur.sid) === String(sid)) { speech.stop(); }
+      deleteSentenceDb(dbRef.current, sid);
+      setSelSens(prev => { const n = new Set(prev); n.delete(sid); return n; });
+      afterWrite('已删除句子（💾 保存后写入文件）');
+    });
+  }, [confirmDelete, afterWrite, playingIdx, speech]);
+
+  const deleteConv = useCallback((mid) => {
+    const col = dataRef.current[curColIdx];
+    if (!col || !dbRef.current) return;
+    const conv = findConvAnywhere(dataRef.current, mid);
+    const count = conv ? conv.sentences.filter(s => s.type !== 'section').length : 0;
+    confirmDelete(`确定删除该对话（${count} 句）吗？（💾 保存后才会从文件移除）`, () => {
+      const cur = playlistRef.current[playingIdx];
+      if (cur && cur.convId === mid) { speech.stop(); }
+      deleteConvDb(dbRef.current, mid, col.id);
+      setSelConvs(prev => { const n = new Set(prev); n.delete(mid); return n; });
+      if (conv) {
+        setSelSens(prev => {
+          const n = new Set(prev);
+          conv.sentences.forEach(s => n.delete(s.id));
+          return n;
+        });
+      }
+      afterWrite('已删除对话（💾 保存后写入文件）');
+    });
+  }, [curColIdx, playingIdx, speech, confirmDelete, afterWrite]);
+
+  const createCollection = useCallback((title, lang) => {
+    if (!dbRef.current) { showSnack('请先加载一个数据库'); return; }
+    const id = uuid();
+    insertCollectionList(dbRef.current, { id, title, lang, index: maxCollectionIndex(dbRef.current) });
+    afterWrite('已新建收藏夹，记得点击 💾 保存');
+    const data = dataRef.current;
+    const idx = data.findIndex(c => c.id === id);
+    if (idx >= 0) setCurColIdx(idx);
+  }, [afterWrite, showSnack]);
+
+  const openEditModal = useCallback((s) => {
+    setModal({ type: 'edit', sid: s.id, base: { content: s.content || '', translation: s.translation || '', tags: s.tags || '', ruby: s.ruby || '' } });
+  }, []);
+
+  const openAddModal = useCallback(() => {
+    if (!dataRef.current[curColIdx]) { showSnack('请先选择收藏夹'); return; }
+    setModal({ type: 'add' });
+  }, [curColIdx, showSnack]);
+
   // ===== 播放操作 =====
   const onRowClick = useCallback((sentence) => {
     if (!speech.state.playing) return;   // 非播放状态点句子不动作（方便划选取词）
@@ -632,6 +800,19 @@ export default function App() {
     return blocks;
   }, [flatItems, safePage, pageSize]);
 
+  // 每个 pageBlock 对应的 flatItems 起始下标（与 .scroll-list 顶层子元素一一对应），
+  // 用于滚动时把"视口顶部内容"回溯到所属分栏——孤儿对话的分栏头可能在上一页，DOM 里找不到
+  const blockFis = useMemo(() => {
+    let fi = (safePage - 1) * pageSize;
+    return pageBlocks.map(b => {
+      const start = fi;
+      fi += b.section ? 1 + b.convs.length : b.convs.length;
+      return start;
+    });
+  }, [pageBlocks, safePage, pageSize]);
+  const blockFisRef = useRef(blockFis);
+  blockFisRef.current = blockFis;
+
   // 测试/调试钩子
   useEffect(() => {
     window.__ocat = {
@@ -714,13 +895,17 @@ export default function App() {
       <div className="main">
         {/* 导航栏 */}
         <div className="nav-rail" style={{ width: navW }}>
-          <div className="nav-search">
-            <div className="nav-search-field">
+          <div className="nav-search" style={{ display: 'flex', gap: 4 }}>
+            <div className="nav-search-field" style={{ flex: 1 }}>
               <span className="mi">search</span>
               <input type="text" placeholder="搜索收藏夹" value={navSearch}
                      onChange={e => setNavSearch(e.target.value)}
                      onKeyDown={e => { if (e.key === 'Escape') { setNavSearch(''); e.target.blur(); } }} />
             </div>
+            <button className="md-btn md-btn-tonal" style={{ width: 32, height: 32, padding: 0, justifyContent: 'center' }}
+                    title="新建收藏夹" onClick={() => { if (dbRef.current) setModal({ type: 'newcol' }); else showSnack('请先加载一个数据库'); }}>
+              <span className="mi" style={{ fontSize: 18 }}>add</span>
+            </button>
           </div>
           {dataRef.current.map((col, i) => {
             const totalS = allConvs(col).reduce((t, c) => t + c.sentences.length, 0);
@@ -765,6 +950,7 @@ export default function App() {
               </button>
               <button className="md-btn md-btn-outlined md-btn-sm" onClick={() => doExport('csv')} disabled={!exportCount}>CSV</button>
               <button className="md-btn md-btn-text md-btn-sm" onClick={() => doExport('txt')} disabled={!exportCount}>TXT</button>
+              <button className="md-btn md-btn-tonal md-btn-sm" onClick={openAddModal} disabled={curColIdx < 0 || !!view.cross} title="向当前收藏夹添加句子或分栏"><span className="mi">add</span></button>
             </div>
 
             <div className="filter-chips" style={{ display: curColIdx >= 0 && !view.cross ? 'flex' : 'none' }}>
@@ -778,16 +964,17 @@ export default function App() {
 
             <div className="section-nav" style={{ display: sectioned && !view.cross ? 'flex' : 'none' }}>
               {(sectioned || []).map((sec, si) => (
-                <span key={si} className={'nav-chip' + (activeSection(pageBlocks, sec.si) ? ' active' : '')}
+                <span key={si} className={'nav-chip' + (activeSection(sec.si) ? ' active' : '')}
                       onClick={() => jumpToSection(sec.si)}>{sec.title || '(未分类)'}</span>
               ))}
             </div>
 
             {/* 列表 */}
-            <div className="scroll-list" ref={convListRef}
+            <div className={'scroll-list' + (noMotion ? ' no-motion' : '')} ref={convListRef}
                  onScroll={() => {
                    const show = (convListRef.current?.scrollTop || 0) > 300;
                    if (show !== backTop) setBackTop(show);
+                   if (!settlingRef.current) updateActiveSec();
                  }}>
               {!dbReady && !dataRef.current.length ? (
                 <div className="empty-state">
@@ -892,6 +1079,10 @@ export default function App() {
               {modal.type === 'lookup' && <LookupModal modal={modal} />}
               {modal.type === 'import' && <ImportModal modal={modal} onConfirm={() => importSelected(modal.srcDb, modal.fileName)} onClose={closeModal} />}
               {modal.type === 'synchelp' && <SyncHelpModal onCopy={() => { navigator.clipboard?.writeText(syncCmd()).then(() => showSnack('已复制命令')); }} onClose={closeModal} />}
+              {modal.type === 'edit' && <SentenceEditModal base={modal.base} onSave={(fields) => { saveSentenceEdit(modal.sid, fields); closeModal(); }} onCancel={closeModal} />}
+              {modal.type === 'add' && <SentenceEditModal add onSave={(fields) => { addSentence(fields.type, fields); closeModal(); }} onCancel={closeModal} />}
+              {modal.type === 'newcol' && <NewCollectionModal onSave={(title, lang) => { createCollection(title, lang); closeModal(); }} onCancel={closeModal} />}
+              {modal.type === 'confirm' && <ConfirmModal message={modal.message} onConfirm={() => { const a = confirmActionRef.current; confirmActionRef.current = null; closeModal(); a && a(); }} onCancel={() => { confirmActionRef.current = null; closeModal(); }} />}
             </div>
           </div>
         </div>
@@ -920,18 +1111,39 @@ export default function App() {
     return pages;
   }
   function jumpToSection(si) {
+    const secId = 'sec-' + si;
     const idx = flatItems.findIndex(it => it.type === 'section' && it.si === si);
-    if (idx >= 0) {
-      setPage(Math.floor(idx / pageSize) + 1);
-      setCollapsedSecs(prev => { const n = new Set(prev); n.delete('sec-' + si); return n; });
-    }
+    if (idx < 0) return;
+    setNoMotion(true);   // 禁用展开动画，避免测量时其它分栏仍在位移导致滚偏
+    settlingRef.current = true;
+    setActiveSec(si);
+    setCollapsedSecs(prev => { const n = new Set(prev); n.delete(secId); return n; });
+    pendingSecRef.current = secId;
+    const targetPage = Math.floor(idx / pageSize) + 1;
+    if (targetPage !== safePage) setPage(targetPage);
+    setScrollTick(t => t + 1);   // 统一在提交后由 useLayoutEffect 滚动（同页/跨页都走这里）
   }
-  function activeSection(blocks, si) {
-    // 当前页可见的分栏高亮
-    const start = (safePage - 1) * pageSize;
-    const slice = flatItems.slice(start, start + pageSize);
-    const first = slice.find(it => it.type === 'section');
-    return first && first.si === si;
+  function activeSection(si) {
+    return si === activeSec;
+  }
+  function updateActiveSec() {
+    // 随滚动定位当前分栏：找到视口顶部压线的顶层子元素 → 其 flatItems 下标 → 向前回溯最近的分栏头。
+    // 不能只看 DOM 里的 .section-group：跨页后页首孤儿对话的分栏头在上一页，DOM 中不存在。
+    const list = convListRef.current;
+    const fis = blockFisRef.current;
+    if (!list || !sectioned || !fis.length) return;
+    const topEdge = list.getBoundingClientRect().top + 16;
+    const kids = list.children;
+    let idx = -1;
+    for (let i = 0; i < kids.length; i++) {
+      if (kids[i].getBoundingClientRect().top <= topEdge) idx = i;
+      else break;
+    }
+    if (idx < 0 || idx >= fis.length) return;
+    let fi = fis[idx];
+    while (fi > 0 && flatItems[fi] && flatItems[fi].type !== 'section') fi--;
+    const cur = flatItems[fi] && flatItems[fi].type === 'section' ? flatItems[fi].si : 0;
+    setActiveSec(prev => (prev === cur ? prev : cur));
   }
   function makeState() {
     return {
@@ -947,11 +1159,14 @@ export default function App() {
       onMastered: toggleMastered,
       onView: viewConv,
       onExportConv: exportConvAnki,
+      onEdit: openEditModal,
+      onDeleteSentence: deleteSentence,
+      onDeleteConv: deleteConv,
     };
   }
 }
 
-const modalTitles = { conv: '对话详情', lookup: '分词查词', import: '导入收藏夹', synchelp: '同步服务未启动' };
+const modalTitles = { conv: '对话详情', lookup: '分词查词', import: '导入收藏夹', synchelp: '同步服务未启动', edit: '编辑句子', add: '添加到收藏夹', newcol: '新建收藏夹', confirm: '确认删除' };
 
 function syncCmd() {
   const dir = decodeURIComponent(window.location.href.replace('/index.html', '').replace('file:///', ''));
@@ -982,6 +1197,7 @@ function ConvCard({ conv, colTitle, state }) {
         <div className="conv-card-actions">
           <button className="md-btn md-btn-text md-btn-sm" onClick={e => { e.stopPropagation(); state.onView(conv.messageId); }} title="查看对话原文"><span className="mi">article</span>原文</button>
           <button className="md-btn md-btn-text md-btn-sm" onClick={e => { e.stopPropagation(); state.onExportConv(conv.messageId); }} title="导出该对话为 Anki CSV"><span className="mi">file_download</span></button>
+          <button className="md-btn md-btn-text md-btn-sm" onClick={e => { e.stopPropagation(); state.onDeleteConv(conv.messageId); }} title="删除该对话"><span className="mi">delete_outline</span></button>
         </div>
       </div>
       <div className="conv-sentences"><div className="conv-sentences-inner">
@@ -1012,6 +1228,8 @@ function SentenceRow({ s, state }) {
       </span>
       <span className="sen-lookup" title="分词查词典" onClick={e => { e.stopPropagation(); state.onLookup(s); }}><span className="mi">menu_book</span></span>
       <span className="sen-lookup" title="只读这一句" onClick={e => { e.stopPropagation(); state.onSpeakOnce(s); }}><span className="mi">volume_up</span></span>
+      <span className="sen-lookup" title="编辑句子" onClick={e => { e.stopPropagation(); state.onEdit(s); }}><span className="mi">edit_note</span></span>
+      <span className="sen-lookup" title="删除句子" onClick={e => { e.stopPropagation(); state.onDeleteSentence(s.id); }}><span className="mi">delete_outline</span></span>
     </div>
   );
 }
@@ -1089,6 +1307,19 @@ function SyncHelpModal({ onCopy, onClose }) {
       <div style={{ background: 'var(--md-sys-color-surface-container)', padding: '10px 14px', borderRadius: 8, fontFamily: 'Consolas, monospace', fontSize: 13, marginBottom: 12, textAlign: 'left', userSelect: 'all' }}>{syncCmd()}</div>
       <button className="md-btn md-btn-filled" onClick={() => { onCopy(); onClose(); }}>📋 复制</button>
       <button className="md-btn md-btn-text" onClick={onClose} style={{ marginLeft: 8 }}>关闭</button>
+    </div>
+  );
+}
+
+function ConfirmModal({ message, onConfirm, onCancel }) {
+  return (
+    <div style={{ textAlign: 'center', padding: 8 }}>
+      <div style={{ fontSize: 40, marginBottom: 12, color: 'var(--md-sys-color-error)' }}><span className="mi" style={{ fontSize: 40 }}>warning</span></div>
+      <div style={{ font: 'var(--md-sys-typescale-body-medium)', marginBottom: 20, whiteSpace: 'pre-wrap' }}>{message}</div>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+        <button className="md-btn md-btn-text" onClick={onCancel}>取消</button>
+        <button className="md-btn md-btn-filled" style={{ background: 'var(--md-sys-color-error)' }} onClick={onConfirm}>删除</button>
+      </div>
     </div>
   );
 }
