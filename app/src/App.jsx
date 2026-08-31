@@ -75,6 +75,7 @@ export default function App() {
   const [backTop, setBackTop] = useState(false);
   const snackTimer = useRef(null);
   const convListRef = useRef(null);
+  const navRailRef = useRef(null);
   const searchInputRef = useRef(null);
   const pendingSecRef = useRef(null);
   const pendingPlaySidRef = useRef(null);
@@ -256,6 +257,20 @@ export default function App() {
       setCrossResults(null);
     }
   }, [deferredKw, searchScope, searchField]);
+
+  // 当前收藏夹搜索无结果 → 自动切换为全部收藏夹（一次性升级，避免反复抖动）
+  useEffect(() => {
+    const kw = deferredKw.toLowerCase().trim();
+    if (searchScope !== 'current' || !kw) return;
+    const col = dataRef.current[curColIdx];
+    if (!col) return;
+    const hasAny = allConvs(col).some(conv =>
+      conv.sentences.some(s => s.type !== 'section' && matchSentence(s, conv, kw, searchField)));
+    if (!hasAny) {
+      setSearchScope('all');
+      showSnack(`「${kw}」在当前收藏夹没有匹配，已自动搜索全部收藏夹`, true);
+    }
+  }, [deferredKw, searchScope, searchField, curColIdx, dataVersion, showSnack]);
 
   // 过滤后的当前视图
   const view = useMemo(() => {
@@ -873,7 +888,7 @@ export default function App() {
       {/* 顶栏 */}
       <div className="top-bar">
         <h1 style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
-            onClick={() => convListRef.current?.scrollTo({ top: 0 })} title="点击回到顶部">
+            onClick={() => { scrollToTop(); navRailRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); }} title="点击回到顶部">
           <img src="https://writer.drakeet.com/images/orca_dark.png" width="28" height="28" style={{ borderRadius: 4 }} alt="OCAT" />
           OCAT++
         </h1>
@@ -927,8 +942,8 @@ export default function App() {
 
       <div className="main">
         {/* 导航栏 */}
-        <div className="nav-rail" style={{ width: navW }}>
-          <div className="nav-search" style={{ display: 'flex', gap: 4 }}>
+<div className="nav-rail" ref={navRailRef} style={{ width: navW }}>
+        <div className="nav-search" style={{ display: 'flex', gap: 4 }}>
             <div className="nav-search-field" style={{ flex: 1 }}>
               <span className="mi">search</span>
               <input type="text" placeholder="搜索收藏夹" value={navSearch}
