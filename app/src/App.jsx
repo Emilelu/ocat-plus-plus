@@ -873,7 +873,8 @@ export default function App() {
       info: () => ({
         title: view.title, cross: !!view.cross,
         convCount: view.convs.length,
-        senCount: view.convs.reduce((x, c) => x + c.sentences.length, 0),
+        // cross 视图的元素是 {key, collection, conv} 包裹对象，普通视图是 conv 本体，统一取 (c.conv || c)
+        senCount: view.convs.reduce((x, c) => x + ((c.conv || c).sentences ? (c.conv || c).sentences.length : 0), 0),
         secCount: sectioned ? sectioned.length : 0,
         page: safePage, pageSize,
         playlist: playlistRef.current.length,
@@ -888,7 +889,7 @@ export default function App() {
       {/* 顶栏 */}
       <div className="top-bar">
         <h1 style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
-            onClick={() => { scrollToTop(); navRailRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); }} title="点击回到顶部">
+            onClick={() => { convListRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); navRailRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); }} title="点击回到顶部">
           <img src="https://writer.drakeet.com/images/orca_dark.png" width="28" height="28" style={{ borderRadius: 4 }} alt="OCAT" />
           OCAT++
         </h1>
