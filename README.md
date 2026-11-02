@@ -28,6 +28,8 @@ React 工程化（Vite 构建，打包为单个 HTML），基于 SQL.js 在浏�
 cmd /c "cd /d <项目目录> && python sync_server.py"
 ```
 
+> 同步服务会自动探测 adb（PATH → 常见安装位置）；若 adb 安装在非标准路径，可设置环境变量 `OCAT_ADB` 指向 adb.exe。
+
 保持窗口运行，在浏览器中点击「📱 同步手机」即可。支持三种同步方式：
 
 | 方式 | 适用条件 |
@@ -81,8 +83,6 @@ cmd /c "cd /d <项目目录> && python sync_server.py"
 ```
 ocat_tool/
 ├── index.html             ← 主界面（React 构建产物，双击打开，勿手改）
-├── legacy/
-│   └── index.html         ← 旧版单文件实现（回退备用，功能一致）
 ├── app/                   ← React 工程（源码）
 │   ├── src/
 │   │   ├── App.jsx        ← 界面与状态
@@ -91,7 +91,7 @@ ocat_tool/
 │   ├── vite.config.js     ← 单文件打包（vite-plugin-singlefile）
 │   └── package.json
 ├── sync_server.py         ← 手机同步服务
-├── vendor/                ← 旧版依赖的本地化前端库
+├── vendor/                ← 本地化前端依赖（历史留档，当前构建已全部内联进 index.html）
 ├── README.md
 ├── LICENSE
 └── .gitignore
