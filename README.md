@@ -2,11 +2,11 @@
 
 > OCAT 收藏夹增强工具 — 纯浏览器端运行，支持从手机一键同步数据库。
 
-基于 SQL.js 在浏览器中直接读取 SQLite 数据库，无需安装任何后端服务。界面采用 Material Design 3，支持深浅色模式。
+React 工程化（Vite 构建，打包为单个 HTML），基于 SQL.js 在浏览器中直接读取 SQLite 数据库，无需安装任何后端服务。界面采用 Material Design 3，支持深浅色模式、液态玻璃皮肤与随机配色。
 
 ## 快速开始
 
-1. 双击 `index.html` 打开页面
+1. 双击根目录 `index.html` 打开页面（已构建好的单文件，全部依赖已内联）
 2. 点击「选择数据库」加载 SQLite DB 文件
 3. 开始浏览、搜索、导出
 
@@ -62,6 +62,7 @@ cmd /c "cd /d <项目目录> && python sync_server.py"
 | 偏好记忆 | 倍速/音色/播放模式/每页条数/主题/侧栏宽度/缩放/皮肤自动保存 |
 | 双皮肤 | Material 与液态玻璃（半透明 + 背景模糊）一键切换，深浅色独立适配 |
 | 界面缩放 | 100%~175% 缩放控制，4K 大屏自动放大 |
+| 随机配色 | 点击调色板按钮随机生成 Material You 风格强调色，双击恢复默认 |
 | 深浅色模式 | 跟随系统自动切换，也可手动切换 |
 | 离线可用 | 核心库与图标字体已本地化（vendor/），无网络也能启动 |
 | 数据缓存 | 浏览器 IndexedDB 缓存（含原始数据库），刷新秒开且支持编辑 |
@@ -79,13 +80,33 @@ cmd /c "cd /d <项目目录> && python sync_server.py"
 
 ```
 ocat_tool/
-├── index.html             ← 主界面，双击打开
+├── index.html             ← 主界面（React 构建产物，双击打开，勿手改）
+├── legacy/
+│   └── index.html         ← 旧版单文件实现（回退备用，功能一致）
+├── app/                   ← React 工程（源码）
+│   ├── src/
+│   │   ├── App.jsx        ← 界面与状态
+│   │   ├── lib/           ← 数据库/播放/注音/导出/配色等逻辑
+│   │   └── styles.css
+│   ├── vite.config.js     ← 单文件打包（vite-plugin-singlefile）
+│   └── package.json
 ├── sync_server.py         ← 手机同步服务
-├── vendor/                ← 本地化的前端库（离线可用）
+├── vendor/                ← 旧版依赖的本地化前端库
 ├── README.md
 ├── LICENSE
 └── .gitignore
 ```
+
+### 开发与构建
+
+```bash
+cd app
+npm install
+npm run dev     # 开发调试
+npm run build   # 构建并生成根目录 index.html（单文件）
+```
+
+构建产物已内联全部 JS/CSS/字体/wasm，除查词词典（Kuromoji，走 CDN）外完全离线可用。
 
 ## 常见问题
 

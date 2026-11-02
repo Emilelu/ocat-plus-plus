@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<title>OCAT++</title>
+<link rel="icon" href="https://writer.drakeet.com/images/orca_dark.png">
+<script>
+  // 尽早恢复上次的主题/皮肤/缩放/配色，避免加载闪烁
+  try {
+    var _t = localStorage.getItem('ocat_theme');
+    if (_t) document.documentElement.setAttribute('data-theme', _t);
+    if (localStorage.getItem('ocat_skin') === 'glass') document.documentElement.setAttribute('data-skin', 'glass');
+    var _hue = localStorage.getItem('ocat_hue');
+    if (_hue !== null) document.documentElement.setAttribute('data-pal', _hue);
+    var _z = localStorage.getItem('ocat_zoom');
+    if (_z === null) _z = (screen.width >= 3000) ? '1.25' : '1';
+    if (parseFloat(_z) !== 1) document.documentElement.style.zoom = _z;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="/src/main.jsx"></script>
+</body>
+</html>
