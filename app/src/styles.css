@@ -18,6 +18,9 @@
   --md-sys-color-error-container: #ffdad6;
   --md-sys-color-success: #1b6d3f;
   --md-sys-color-success-container: #d2f7d9;
+  /* UI-01：snackbar 依赖的 inversion token 此前从未定义，导致提示无背景 */
+  --md-sys-color-inverse-surface: #313033;
+  --md-sys-color-inverse-on-surface: #f4eff4;
   --md-sys-elevation-1: 0 1px 2px rgba(0,0,0,.08), 0 1px 3px rgba(0,0,0,.04);
   --md-sys-elevation-2: 0 1px 2px rgba(0,0,0,.08), 0 2px 6px rgba(0,0,0,.04);
   --md-sys-elevation-3: 0 4px 8px rgba(0,0,0,.08), 0 1px 3px rgba(0,0,0,.06);
@@ -40,6 +43,7 @@
   --md-sys-typescale-title-medium: 500 1rem/1.5rem "Noto Sans SC", "Microsoft YaHei", sans-serif;
   --md-sys-typescale-title-large: 400 1.375rem/1.75rem "Noto Sans SC", "Microsoft YaHei", sans-serif;
   --md-sys-typescale-headline-small: 400 1.5rem/2rem "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --md-sys-typescale-body-jp: 400 .9375rem/2.2 "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", "Noto Sans SC", sans-serif;   /* UI-07 */
   --font-ja: "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", "Noto Sans SC", sans-serif;
   --md-sys-motion-duration-short: 200ms;
   --md-sys-motion-duration-medium: 400ms;
@@ -92,6 +96,8 @@
   --md-sys-color-error-container: #93000a;
   --md-sys-color-success: #81c995;
   --md-sys-color-success-container: #00391c;
+  --md-sys-color-inverse-surface: #313033;
+  --md-sys-color-inverse-on-surface: #f4eff4;
   --md-sys-elevation-1: 0 1px 2px rgba(0,0,0,.3), 0 1px 3px rgba(0,0,0,.15);
   --md-sys-elevation-2: 0 1px 2px rgba(0,0,0,.3), 0 2px 6px rgba(0,0,0,.15);
   --md-sys-elevation-3: 0 4px 8px rgba(0,0,0,.3), 0 1px 3px rgba(0,0,0,.2);
@@ -117,6 +123,9 @@
   --md-sys-color-error-container: #ffdad6;
   --md-sys-color-success: #1b6d3f;
   --md-sys-color-success-container: #d2f7d9;
+  /* UI-01：snackbar 依赖的 inversion token 此前从未定义，导致提示无背景 */
+  --md-sys-color-inverse-surface: #313033;
+  --md-sys-color-inverse-on-surface: #f4eff4;
   --md-sys-elevation-1: 0 1px 2px rgba(0,0,0,.08), 0 1px 3px rgba(0,0,0,.04);
   --md-sys-elevation-2: 0 1px 2px rgba(0,0,0,.08), 0 2px 6px rgba(0,0,0,.04);
   --md-sys-elevation-3: 0 4px 8px rgba(0,0,0,.08), 0 1px 3px rgba(0,0,0,.06);
@@ -164,19 +173,49 @@ body {
    Top App Bar
    ============================================================ */
 .top-bar {
-  height: 64px; background: var(--md-sys-color-surface);
-  display: flex; align-items: center; padding: 0 16px; gap: 16px; z-index: 10;
+  min-height: 64px; background: var(--md-sys-color-surface);
+  display: flex; align-items: center; flex-wrap: wrap; padding: 8px 16px; gap: 8px 16px; z-index: 10;
   position: relative;
+  /* UI-02：容器查询以顶栏自身宽度收纳按钮（比视口媒体查询更贴合窄窗口/嵌入场景） */
+  container-type: inline-size;
+  container-name: topbar;
 }
 .top-bar h1 { font: var(--md-sys-typescale-title-large); flex-shrink: 0; }
 .top-bar .db-chip {
   display: flex; align-items: center; gap: 6px; padding: 4px 12px;
   border-radius: var(--md-sys-shape-corner-s); font: var(--md-sys-typescale-label-medium);
-  background: var(--md-sys-color-error-container); color: var(--md-sys-color-error);
+  /* UI-04：未加载是中性初始态，不再用错误红；仅未保存（.dirty）警示 */
+  background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface-variant);
   transition: all var(--md-sys-motion-duration-short) var(--md-sys-motion-easing-standard);
 }
 .top-bar .db-chip.loaded { background: var(--md-sys-color-success-container); color: var(--md-sys-color-success); }
+.top-bar .db-chip.dirty { background: var(--md-sys-color-error-container); color: var(--md-sys-color-error); }
 .top-bar .stats { font: var(--md-sys-typescale-body-small); color: var(--md-sys-color-on-surface-variant); margin-left: auto; }
+
+/* UI-02：窄屏收纳 —— 主行动按钮进溢出菜单、隐藏统计，悬浮菜单样式 */
+.md-btn.topbar-more { display: none; }
+.topbar-menu {
+  position: absolute; right: 8px; top: 100%; margin-top: 6px; z-index: 90;
+  background: var(--md-sys-color-surface-container-high); border-radius: var(--md-sys-shape-corner-m);
+  box-shadow: var(--md-sys-elevation-3); padding: 6px; min-width: 180px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.topbar-menu-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  border: none; background: transparent; cursor: pointer; text-align: left;
+  border-radius: var(--md-sys-shape-corner-s); font: var(--md-sys-typescale-label-large);
+  color: var(--md-sys-color-on-surface); white-space: nowrap;
+}
+.topbar-menu-item:hover { background: var(--md-sys-state-hover); }
+/* UI-02：顶栏自身宽度 ≤720px 时收纳主行动按钮（容器查询，窄窗口/嵌入场景均生效） */
+@container topbar (max-width: 720px) {
+  .topbar-action, .topbar-stats { display: none; }
+  .md-btn.topbar-more { display: inline-flex; }
+}
+.search-bar { container-type: inline-size; container-name: searchbar; }
+@container searchbar (max-width: 720px) {
+  .search-hint { display: none; }
+}
 
 /* Material Buttons */
 .md-btn {
@@ -249,7 +288,6 @@ body {
   border-color: var(--md-sys-color-primary);
   box-shadow: var(--md-sys-elevation-1);
 }
-.search-field svg { flex-shrink: 0; color: var(--md-sys-color-on-surface-variant); }
 .search-field input {
   flex: 1; border: none; background: transparent; outline: none;
   font: var(--md-sys-typescale-body-large); color: var(--md-sys-color-on-surface);
@@ -391,7 +429,10 @@ body {
   box-shadow: var(--md-sys-elevation-1);
 }
 .playback-bar .pb-play:hover { box-shadow: var(--md-sys-elevation-2); }
-.playback-bar .pb-mode.active { color: var(--md-sys-color-primary); }
+.playback-bar .pb-mode.active {
+  color: var(--md-sys-color-primary);
+  background: var(--md-sys-state-hover);
+}
 
 /* ============================================================
    Conversation Card
@@ -440,6 +481,10 @@ body {
 }
 .sen-checkbox { width: 16px; height: 16px; }
 .sen-checkbox:checked::after { left: 3px; top: 0; width: 5px; height: 9px; }
+/* UI-06：勾选框键盘焦点可见 */
+.md-checkbox:focus-visible, .sen-checkbox:focus-visible, .conv-checkbox:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px;
+}
 
 .conv-card-body { flex: 1; min-width: 0; }
 
@@ -472,7 +517,6 @@ body {
 /* Expanded sentences - smooth grid animation */
 .conv-sentences {
   display: grid; grid-template-rows: 0fr;
-  transition: grid-template-rows var(--md-sys-motion-duration-medium) var(--md-sys-motion-easing-standard);
   border-top: 1px solid transparent;
   transition: grid-template-rows var(--md-sys-motion-duration-medium) var(--md-sys-motion-easing-standard),
               border-color var(--md-sys-motion-duration-medium) var(--md-sys-motion-easing-standard);
@@ -493,7 +537,7 @@ body {
 
 .sentence-row .sen-content { flex: 1; }
 .sentence-row .sen-ja {
-  font-family: var(--font-ja); font-size: 15px; line-height: 2.2; margin-bottom: 2px;
+  font: var(--md-sys-typescale-body-jp); margin-bottom: 2px;   /* UI-07：纳入 typescale 体系 */
 }
 /* 逐字原生 ruby：读音按字分配，浏览器自动为假名片预留宽度 → 永不重叠；
    拆分均衡时（每字 1~2 假名）字距几乎无变化 */
@@ -519,15 +563,20 @@ body {
 .sentence-row .sen-tag.mastered {
   background: var(--md-sys-color-success-container); color: var(--md-sys-color-success);
 }
+/* UI-06：操作图标改为 button 后的重置 + 键盘焦点样式 */
 .sentence-row .sen-lookup {
   color: var(--md-sys-color-on-surface-variant);
   cursor: pointer; white-space: nowrap; flex-shrink: 0;
   width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: var(--md-sys-shape-corner-full);
+  border: none; background: transparent; padding: 0; font: inherit;
   transition: background var(--md-sys-motion-duration-short), color var(--md-sys-motion-duration-short);
 }
 .sentence-row .sen-lookup .mi { font-size: 18px; }
 .sentence-row .sen-lookup:hover { background: var(--md-sys-state-hover); color: var(--md-sys-color-primary); }
+.sentence-row .sen-lookup:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px;
+}
 .sentence-row .sen-lookup.sen-mastered.on { color: var(--md-sys-color-success); }
 .sentence-row .sen-lookup.sen-mastered.on:hover { color: var(--md-sys-color-error); }
 
@@ -550,6 +599,10 @@ body {
 }
 .section-group.collapsed .section-arrow { transform: rotate(-90deg); }
 .section-group-header .section-count { font: var(--md-sys-typescale-label-small); color: var(--md-sys-color-on-surface-variant); margin-left: auto; }
+/* BUG-03：分栏头编辑/删除按钮 */
+.section-group-header .section-actions { display: flex; gap: 0; flex-shrink: 0; }
+.section-group-header .section-actions .md-btn { width: 28px; height: 28px; padding: 0; justify-content: center; border-radius: var(--md-sys-shape-corner-full); }
+.section-group-header .section-actions .md-btn .mi { font-size: 16px; }
 .section-group-body {
   transition: max-height var(--md-sys-motion-duration-medium) var(--md-sys-motion-easing-standard);
   max-height: 9999px; overflow: hidden;
@@ -601,7 +654,6 @@ body {
 }
 
 /* Markdown content in modal */
-.modal-body .md-content { }
 .modal-body .md-content h2 { font: var(--md-sys-typescale-title-medium); margin: 16px 0 8px; }
 .modal-body .md-content h3 { font: var(--md-sys-typescale-label-large); margin: 12px 0 6px; }
 .modal-body .md-content p { margin: 8px 0; }
@@ -797,3 +849,27 @@ html[data-skin="glass"][data-theme="dark"] .section-group {
   display: flex; align-items: center; justify-content: center;
 }
 .back-to-top .mi { font-size: 18px; }
+
+/* ============================================================
+   UI-11：尊重系统「减弱动态效果」
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ============================================================
+   UI-11：尊重系统「减弱动态效果」
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

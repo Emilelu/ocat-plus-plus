@@ -49,14 +49,15 @@ export function SentenceRow({ s, state }) {
         <div className="sen-zh">{s.translation}</div>
         <div className="sen-tags">{s.tags ? <span className="sen-tag">{s.tags}</span> : null}</div>
       </div>
-      <span className={'sen-lookup sen-mastered' + (s.isMastered ? ' on' : '')} title={s.isMastered ? '取消已掌握' : '标记为已掌握'}
+      {/* UI-06：操作图标用 button，保证键盘可达与焦点样式 */}
+      <button type="button" className={'sen-lookup sen-mastered' + (s.isMastered ? ' on' : '')} title={s.isMastered ? '取消已掌握' : '标记为已掌握'}
             onClick={e => { e.stopPropagation(); state.onMastered(s.id); }}>
         <span className="mi">{s.isMastered ? 'check_circle' : 'radio_button_unchecked'}</span>
-      </span>
-      <span className="sen-lookup" title="分词查词典" onClick={e => { e.stopPropagation(); state.onLookup(s); }}><span className="mi">menu_book</span></span>
-      <span className="sen-lookup" title="只读这一句" onClick={e => { e.stopPropagation(); state.onSpeakOnce(s); }}><span className="mi">volume_up</span></span>
-      <span className="sen-lookup" title="编辑句子" onClick={e => { e.stopPropagation(); state.onEdit(s); }}><span className="mi">edit_note</span></span>
-      <span className="sen-lookup" title="删除句子" onClick={e => { e.stopPropagation(); state.onDeleteSentence(s.id); }}><span className="mi">delete_outline</span></span>
+      </button>
+      <button type="button" className="sen-lookup" title="分词查词典" onClick={e => { e.stopPropagation(); state.onLookup(s); }}><span className="mi">menu_book</span></button>
+      <button type="button" className="sen-lookup" title="只读这一句" onClick={e => { e.stopPropagation(); state.onSpeakOnce(s); }}><span className="mi">volume_up</span></button>
+      <button type="button" className="sen-lookup" title="编辑句子" onClick={e => { e.stopPropagation(); state.onEdit(s); }}><span className="mi">edit_note</span></button>
+      <button type="button" className="sen-lookup" title="删除句子" onClick={e => { e.stopPropagation(); state.onDeleteSentence(s.id); }}><span className="mi">delete_outline</span></button>
     </div>
   );
 }
