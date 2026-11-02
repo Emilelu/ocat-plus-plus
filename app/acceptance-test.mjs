@@ -105,4 +105,27 @@ assert(allConvs(col2).length === 0, '重载导出库：两句均被软删除，�
 const rubyHtml = bracketsToRubyHtml('口頭[こうとう]での一番[いちばん]の壁[かべ]は');
 assert(rubyHtml === '<ruby>口頭<rt>こうとう</rt></ruby><ruby>で</ruby><ruby>の</ruby><ruby>一番<rt>いちばん</rt></ruby><ruby>の</ruby><ruby>壁<rt>かべ</rt></ruby><ruby>は</ruby>', `注音 HTML 格式正确：${rubyHtml}`);
 
+// ---- 12. 分栏数据携带 sentenceId（BUG-03：分栏头编辑/删除入口依赖）----
+// 注：普通句排序在分栏前时，loadAllData 会生成无 sentenceId 的前置伪分栏（UI 对其禁用编辑/删除按钮）
+const secObj = c3.sections.find(s => s.title === '第一栏');
+assert(secObj && secObj.sentenceId === sidSec, `分栏携带 sentenceId 且指向底层记录：${secObj && secObj.sentenceId}`);
+
+// ---- 13. CSV 导出公式注入防护（BUG-09）----
+import { buildCsv, buildAnkiCsv, buildConvAnkiCsv } from './src/lib/export.js';
+const riskyRow = {
+  id: 'r1', content: '=cmd|\' /C calc\'!A0', translation: '+SUM(A1:A2)',
+  ruby: null, lang: 'ja', isMastered: false, tags: '@tag', type: null, index: 0,
+  userQuestion: '-1+1', collectionName: '@evil',
+};
+const csvOut = buildCsv([riskyRow]);
+assert(csvOut.includes("'=cmd") && csvOut.includes("'+SUM") && csvOut.includes("'-1+1") && csvOut.includes("'@evil") && csvOut.includes("'@tag"),
+  'CSV 导出对 = + - @ 开头字段加单引号防护');
+const ankiOut = buildAnkiCsv([riskyRow]);
+assert(ankiOut.includes("'+SUM") && ankiOut.includes("'=cmd"), 'Anki CSV 同样防护公式注入');
+const convAnkiOut = buildConvAnkiCsv({ sentences: [riskyRow], userQuestion: '=x' }, 'T');
+assert(convAnkiOut.includes("'=x"), '单对话 Anki CSV 同样防护');
+// 引号转义仍保留（回归）
+const quoteRow = { ...riskyRow, content: 'say "hi"', translation: '', ruby: null, tags: '', userQuestion: '', collectionName: 'T' };
+assert(buildCsv([quoteRow]).includes('"say ""hi"""'), 'CSV 双引号转义保持不变');
+
 console.log('\n=== 验收测试全部通过 ===');
