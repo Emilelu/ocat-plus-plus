@@ -23,13 +23,18 @@ export function createSpeech({ playlistRef, onSpeakItem }) {
   }
 
   const getVoices = () => voices;
+  function langPrefix(lang) {
+    return lang === 'ja' ? 'ja' : lang === 'en' ? 'en' : lang === 'zh' ? 'zh' : (lang || 'ja');
+  }
   function voiceFor(lang) {
+    const prefix = langPrefix(lang);
+    // 手动指定的音色仅在语言与当前句子一致时使用；否则回退到按语言前缀匹配，
+    // 避免「英文音色读日语」导致 voice.lang 与 utterance.lang 不匹配而无声。
     if (st.voiceURI) {
       const v = voices.find(v => v.voiceURI === st.voiceURI);
-      if (v) return v;
+      if (v && v.lang.toLowerCase().startsWith(prefix)) return v;
     }
-    const prefix = lang === 'ja' ? 'ja' : lang === 'en' ? 'en' : lang === 'zh' ? 'zh' : lang;
-    return voices.find(v => v.lang.startsWith(prefix)) || null;
+    return voices.find(v => v.lang && v.lang.toLowerCase().startsWith(prefix)) || null;
   }
 
   function pickShuffle(n) {

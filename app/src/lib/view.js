@@ -7,12 +7,18 @@ export const MODAL_TITLES = {
 };
 
 // 搜索命中判定（跨收藏夹搜索与当前收藏夹搜索共用）
+// 注意：translation / userQuestion / aiAnswer 在库里可能为 NULL，必须空值兜底，
+// 否则 'all' 字段拼接后 .toLowerCase() 抛 TypeError，导致搜索崩溃。
 export function matchSentence(s, conv, keyword, field) {
-  if (field === 'all') return (s.content + s.translation + conv.userQuestion + conv.aiAnswer).toLowerCase().includes(keyword);
-  if (field === 'content') return s.content.toLowerCase().includes(keyword);
-  if (field === 'translation') return s.translation.toLowerCase().includes(keyword);
-  if (field === 'question') return conv.userQuestion.toLowerCase().includes(keyword);
-  if (field === 'answer') return conv.aiAnswer.toLowerCase().includes(keyword);
+  const S = (s && s.content) || '';
+  const T = (s && s.translation) || '';
+  const Q = (conv && conv.userQuestion) || '';
+  const A = (conv && conv.aiAnswer) || '';
+  if (field === 'all') return (S + T + Q + A).toLowerCase().includes(keyword);
+  if (field === 'content') return S.toLowerCase().includes(keyword);
+  if (field === 'translation') return T.toLowerCase().includes(keyword);
+  if (field === 'question') return Q.toLowerCase().includes(keyword);
+  if (field === 'answer') return A.toLowerCase().includes(keyword);
   return false;
 }
 
