@@ -43,7 +43,18 @@ export function pageRange(page, total) {
 }
 
 // 手机同步服务的启动命令（供复制）
+// file:// 下解析出项目目录；http 等其他环境无法得知本地路径，给出占位符（待确认6）
 export function syncCmd() {
-  const dir = decodeURIComponent(window.location.href.replace('/index.html', '').replace('file:///', ''));
+  let dir = '<项目目录>';
+  try {
+    const u = new URL(window.location.href);
+    if (u.protocol === 'file:') {
+      let p = u.pathname;
+      try { p = decodeURIComponent(p); } catch { /* 保留原路径 */ }
+      p = p.replace(/\/[^/]*$/, '');            // 去掉文件名（含目录 URL、带查询/哈希等情况）
+      dir = p.replace(/^\/+/, '').replace(/\//g, '\\');
+      if (!dir) dir = '<项目目录>';
+    }
+  } catch { /* URL 解析失败时保留占位符 */ }
   return `cmd /c "cd /d ${dir} && python sync_server.py"`;
 }

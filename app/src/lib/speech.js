@@ -100,6 +100,7 @@ export function createSpeech({ playlistRef, onSpeakItem }) {
       onSpeakItem(list[st.index], st.index);
     },
     play(from = st.index) {
+      if (!('speechSynthesis' in window)) return false;   // BUG-15：不支持语音的环境不得进入播放态
       const n = playlistRef.current.length;
       if (!n) return false;
       st.playing = true;
@@ -119,12 +120,14 @@ export function createSpeech({ playlistRef, onSpeakItem }) {
       onSpeakItem();
     },
     next() {
+      if (!('speechSynthesis' in window)) return;
       const n = playlistRef.current.length;
       if (!n) return;
       st.playing = true;
       speakAt(st.mode === 'shuffle' ? pickShuffle(n) : st.index + 1);
     },
     prev() {
+      if (!('speechSynthesis' in window)) return;
       const n = playlistRef.current.length;
       if (!n) return;
       st.playing = true;
@@ -132,6 +135,7 @@ export function createSpeech({ playlistRef, onSpeakItem }) {
     },
     /** 跳到播放列表中的某一项（播放中点句子） */
     jumpTo(index) {
+      if (!('speechSynthesis' in window)) return;
       if (index < 0) return;
       st.playing = true;
       speakAt(index);

@@ -4,21 +4,30 @@ import TinySegmenter from './vendor-tiny-segmenter.js';
 
 let tokenizer = null;
 let tokenizerFailed = false;
+let notified = false;
 
-export async function initTokenizer() {
-  if (tokenizer || tokenizerFailed) return tokenizer;
-  try {
-    if (window.kuromoji) {
-      tokenizer = await new Promise((resolve, reject) => {
-        window.kuromoji.builder({ dicPath: 'https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/' }).build((err, t) => {
-          if (err) reject(err); else resolve(t);
-        });
-      });
-    }
-  } catch (e) {
+// kuromoji 词典在 CDN，弱网/离线会失败：超时或报错后降级 TinySegmenter，
+// 并通过 onDegraded 通知调用方给出可见提示（避免静默降级，用户无感知地损失分词质量）
+export function initTokenizer(onDegraded) {
+  if (tokenizer || tokenizerFailed) return Promise.resolve(tokenizer);
+  if (!window.kuromoji) {
     tokenizerFailed = true;
+    if (onDegraded && !notified) { notified = true; onDegraded(new Error('kuromoji unavailable')); }
+    return Promise.resolve(null);
   }
-  return tokenizer;
+  const build = new Promise((resolve, reject) => {
+    window.kuromoji.builder({ dicPath: 'https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/' }).build((err, t) => {
+      if (err) reject(err); else resolve(t);
+    });
+  });
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('dict load timeout')), 15000));
+  return Promise.race([build, timeout])
+    .then(t => { tokenizer = t; return t; })
+    .catch(e => {
+      tokenizerFailed = true;
+      if (onDegraded && !notified) { notified = true; onDegraded(e); }
+      return null;
+    });
 }
 
 const PUNCT_RE = /^[、。，．！？\s　.,!?\n「」『』（）]+$/;

@@ -29,14 +29,21 @@ function allConvsOf(col) {
   return col.hasSections ? col.sections.flatMap(s => s.conversations) : col.conversations;
 }
 
+// CSV 公式注入防护（BUG-09）：= + - @ 或制表符开头的字段会被 Excel/WPS 当公式执行，
+// 前缀单引号使其按文本处理（OWASP CSV Injection 惯例）；同时保留双引号转义
+function csvSafe(v) {
+  const s = String(v == null ? '' : v).replace(/"/g, '""');
+  return /^[=+\-@\t]/.test(s) ? "'" + s : s;
+}
+
 export function buildAnkiCsv(sentences) {
   let csv = '正面,反面,标签\n';
   sentences.forEach(s => {
-    const front = `"${(s.translation || '').replace(/"/g, '""')}<br><br><small>${(s.userQuestion || '').replace(/"/g, '""')}</small>"`;
-    let back = (s.content || '').replace(/"/g, '""');
-    if (s.ruby) back += `<br><br><small>${s.ruby.replace(/"/g, '""')}</small>`;
-    const tags = [s.collectionName];
-    if (s.tags) tags.push(s.tags);
+    const front = `"${csvSafe(s.translation || '')}<br><br><small>${csvSafe(s.userQuestion || '')}</small>"`;
+    let back = csvSafe(s.content || '');
+    if (s.ruby) back += `<br><br><small>${csvSafe(s.ruby)}</small>`;
+    const tags = [csvSafe(s.collectionName)];
+    if (s.tags) tags.push(csvSafe(s.tags));
     if (s.isMastered) tags.push('mastered');
     csv += `${front},"${back}","${tags.join(' ')}"\n`;
   });
@@ -46,7 +53,7 @@ export function buildAnkiCsv(sentences) {
 export function buildCsv(sentences) {
   let csv = '序号,收藏夹,日语句子,中文翻译,振假名,用户提问,标签,已掌握\n';
   sentences.forEach((s, i) => {
-    csv += `${i + 1},"${s.collectionName}","${(s.content || '').replace(/"/g, '""')}","${(s.translation || '').replace(/"/g, '""')}","${(s.ruby || '').replace(/"/g, '""')}","${(s.userQuestion || '').replace(/"/g, '""')}","${(s.tags || '').replace(/"/g, '""')}",${s.isMastered ? '是' : ''}\n`;
+    csv += `${i + 1},"${csvSafe(s.collectionName)}","${csvSafe(s.content || '')}","${csvSafe(s.translation || '')}","${csvSafe(s.ruby || '')}","${csvSafe(s.userQuestion || '')}","${csvSafe(s.tags || '')}",${s.isMastered ? '是' : ''}\n`;
   });
   return csv;
 }
@@ -66,7 +73,7 @@ export function buildTxt(sentences) {
 export function buildConvAnkiCsv(conv, colName) {
   let csv = '正面,反面,标签\n';
   conv.sentences.filter(s => s.type !== 'section').forEach(s => {
-    csv += `"${(s.translation || '').replace(/"/g, '""')}<br><br><small>${(conv.userQuestion || '').replace(/"/g, '""')}</small>","${(s.content || '').replace(/"/g, '""')}","${colName}"\n`;
+    csv += `"${csvSafe(s.translation || '')}<br><br><small>${csvSafe(conv.userQuestion || '')}</small>","${csvSafe(s.content || '')}","${csvSafe(colName)}"\n`;
   });
   return csv;
 }

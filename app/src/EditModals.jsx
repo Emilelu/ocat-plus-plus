@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 const field = {
   width: '100%', border: '1px solid var(--md-sys-color-outline)', borderRadius: 8,
@@ -7,15 +7,40 @@ const field = {
 };
 
 // 句子编辑 / 添加（add 模式多出类型选择）
+// BUG-10：有未保存更改时按 Esc 不直接关闭，弹出行内确认，避免内容无提示丢失
 export function SentenceEditModal({ base, add, onSave, onCancel }) {
   const [type, setType] = useState('sentence');
   const [content, setContent] = useState(add ? '' : base.content);
   const [translation, setTranslation] = useState(add ? '' : base.translation);
   const [tags, setTags] = useState(add ? '' : base.tags);
   const [ruby, setRuby] = useState(add ? '' : base.ruby);
+  const [confirmClose, setConfirmClose] = useState(false);
   const isSection = add && type === 'section';
+  const init = useRef({ content: add ? '' : base.content, translation: add ? '' : base.translation, tags: add ? '' : base.tags, ruby: add ? '' : base.ruby });
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      const dirty = content !== init.current.content || translation !== init.current.translation
+        || tags !== init.current.tags || ruby !== init.current.ruby;
+      if (dirty) {
+        e.stopImmediatePropagation();   // 拦截 App 的「Esc 关闭模态框」，保留编辑状态
+        setConfirmClose(true);
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [content, translation, tags, ruby]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {confirmClose && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 8, background: 'var(--md-sys-color-error-container)', color: 'var(--md-sys-color-error)' }}>
+          <span style={{ flex: 1 }}>有未保存的更改，关闭将丢失</span>
+          <button className="md-btn md-btn-text md-btn-sm" onClick={onCancel}>放弃修改</button>
+          <button className="md-btn md-btn-tonal md-btn-sm" onClick={() => setConfirmClose(false)}>继续编辑</button>
+        </div>
+      )}
       {add && (
         <div style={{ display: 'flex', gap: 8 }}>
           <div className={'md-chip' + (type === 'sentence' ? ' selected' : '')} onClick={() => setType('sentence')}>句子</div>

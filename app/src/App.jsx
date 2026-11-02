@@ -12,6 +12,7 @@ import { escHtml, escAttr, stripMarkdown, renderContentWithRuby, cleanRubyText, 
 import { createSpeech } from './lib/speech.js';
 import { getHue, applyPalette, randomHue } from './lib/palette.js';
 import { initTokenizer, tokenize, simpleSplit, dictLinks, dictLinksEn } from './lib/lookup.js';
+import orcaLogo from './assets/orca.png';   // BUG-14：logo 本地化，离线不裂图
 import {
   dateStamp, exportFileBase, getSelectedSentences,
   buildAnkiCsv, buildCsv, buildTxt, buildConvAnkiCsv, downloadFile,
@@ -23,6 +24,9 @@ import { ConvModal, LookupModal, ImportModal, SyncHelpModal, ConfirmModal } from
 import { SelectionPopup } from './components/SelectionPopup.jsx';
 
 marked.setOptions({ breaks: true, gfm: true });
+
+// UI-12：主入口与导入共用同一 accept 常量
+const DB_ACCEPT = '.db,.sqlite,.sqlite3';
 
 export default function App() {
   // ===== 数据 =====
@@ -70,10 +74,12 @@ export default function App() {
   const [zoom, setZoomState] = useState(() => parseFloat(store.get('zoom', '')) || (screen.width >= 3000 ? 1.25 : 1));
   const [hue, setHueState] = useState(() => getHue());
   const [snack, setSnack] = useState(null);
-  const [modal, setModal] = useState(null);   // {type:'conv'|'lookup'|'import'|'synchelp', ...}
+  const [modal, setModal] = useState(null);   // {type:'conv'|'lookup'|'import'|'synchelp'|'edit'|'add'|'newcol'|'confirm', ...}
   const [modalClosing, setModalClosing] = useState(false);
   const [backTop, setBackTop] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);   // UI-02：窄屏溢出菜单
   const snackTimer = useRef(null);
+  const palClickTimer = useRef(null);   // UI-14：区分调色板单击/双击
   const convListRef = useRef(null);
   const navRailRef = useRef(null);
   const searchInputRef = useRef(null);
@@ -91,6 +97,13 @@ export default function App() {
   const setDbChip = useCallback((loaded, extra) => {
     setDbReady(loaded);
     setDbChipExtra(extra || '');
+  }, []);
+
+  // ===== 通用确认弹窗（BUG-01 需要在 openDatabase 等更早位置引用，故置顶）=====
+  const confirmActionRef = useRef(null);
+  const confirmAction = useCallback((message, action, opts) => {
+    confirmActionRef.current = action;
+    setModal({ type: 'confirm', message, ...(opts || {}) });
   }, []);
 
   // ===== 语音控制器 =====
@@ -147,7 +160,8 @@ export default function App() {
   // ===== 启动：缓存 → 数据 + 重建内存 db =====
   useEffect(() => {
     (async () => {
-      initTokenizer();
+      // 待确认2：词典降级不再静默，给出可见提示
+      initTokenizer(() => showSnack('日语词典加载失败，分词已降级为轻量模式'));
       const cached = await loadCached();
       if (cached && cached.data && cached.data.length) {
         dataRef.current = cached.data;
@@ -165,6 +179,16 @@ export default function App() {
         }
       }
     })();
+  }, [showSnack, setDbChip]);
+
+  // BUG-02：音色列表异步到达时刷新渲染（speech.js 的 onvoiceschanged 只更新内部变量）
+  useEffect(() => {
+    if (!('speechSynthesis' in window)) return;
+    const synth = window.speechSynthesis;
+    const onChange = () => setVoicesVersion(v => v + 1);
+    synth.addEventListener('voiceschanged', onChange);
+    if (synth.getVoices().length) onChange();   // 部分浏览器启动时已就绪，不再发事件
+    return () => synth.removeEventListener('voiceschanged', onChange);
   }, []);
 
   const loadFromBuffer = useCallback(async (buf, name) => {
@@ -176,25 +200,53 @@ export default function App() {
     setDbFileName(name || 'OCAT.db');
     setDbChip(true, '');
     showSnack('数据库加载成功', true);
-    await cacheData(data, dbRef.current, name || 'OCAT.db', false);
+    try {
+      await cacheData(data, dbRef.current, name || 'OCAT.db', false);
+    } catch (e) {
+      // BUG-04：缓存写失败不能吞掉加载成果，但要让用户知道刷新后需重选
+      console.warn('cache write failed', e);
+      showSnack('缓存写入失败，刷新页面后需重新选择数据库');
+    }
   }, [showSnack, setDbChip]);
 
   const openDatabase = useCallback(() => {
-    const input = document.createElement('input');
-    input.type = 'file'; input.accept = '.db,.sqlite,.sqlite3';
-    input.onchange = async e => {
-      const file = e.target.files[0];
-      if (!file) return;
-      try {
-        await loadFromBuffer(await file.arrayBuffer(), file.name);
-      } catch (err) { showSnack('加载失败: ' + err.message); }
+    const doOpen = () => {
+      const input = document.createElement('input');
+      input.type = 'file'; input.accept = DB_ACCEPT;
+      input.onchange = async e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+          await loadFromBuffer(await file.arrayBuffer(), file.name);
+        } catch (err) { showSnack('加载失败: ' + err.message); }
+      };
+      input.click();
     };
-    input.click();
-  }, [loadFromBuffer, showSnack]);
+    // BUG-01：有未保存更改时先确认，避免静默丢失
+    if (dbRef.current && dbDirty) {
+      confirmAction('浏览器内有未保存的更改，加载新数据库将丢失这些更改。是否继续？', doOpen,
+        { title: '未保存的更改', confirmLabel: '继续' });
+      return;
+    }
+    doOpen();
+  }, [loadFromBuffer, showSnack, dbDirty, confirmAction]);
 
   const clearCache = useCallback(async () => {
     speech.stop();
-    await new Promise(res => { const req = indexedDB.open('ocat_cache', 1); req.onsuccess = () => { req.result.close(); indexedDB.deleteDatabase('ocat_cache'); res(); }; });
+    // BUG-04：监听 error/blocked，任何分支都必须收尾，避免 Promise 永挂
+    await new Promise(res => {
+      let settled = false;
+      const done = () => { if (!settled) { settled = true; res(); } };
+      const req = indexedDB.open('ocat_cache', 1);
+      req.onsuccess = () => { req.result.close(); runDelete(); };
+      req.onerror = done;
+      function runDelete() {
+        const del = indexedDB.deleteDatabase('ocat_cache');
+        del.onsuccess = done;
+        del.onerror = done;
+        del.onblocked = () => { showSnack('缓存被其他标签页占用，请关闭后重试'); done(); };
+      }
+    });
     dataRef.current = []; bumpData();
     dbRef.current = null;
     setDbDirty(false); setDbFileName('OCAT.db');
@@ -238,21 +290,22 @@ export default function App() {
   useEffect(() => {
     const kw = deferredKw.toLowerCase().trim();
     if (searchScope === 'all' && kw) {
-      const results = [];
+      // BUG-08：Map 聚合替代数组 find，避免 O(n²)；聚合无上限的遍历保持原语义
+      const byKey = new Map();
       for (const col of dataRef.current) {
         for (const conv of allConvs(col)) {
           for (const s of conv.sentences) {
             if (s.type === 'section') continue;
             if (matchSentence(s, conv, kw, searchField)) {
               const key = `${col.id}|${conv.messageId}`;
-              const existing = results.find(r => r.key === key);
-              if (existing) existing.conv.sentences.push(s);
-              else results.push({ key, collection: col, conv: { ...conv, sentences: [s] } });
+              const entry = byKey.get(key);
+              if (entry) entry.conv.sentences.push(s);
+              else byKey.set(key, { key, collection: col, conv: { ...conv, sentences: [s] } });
             }
           }
         }
       }
-      setCrossResults(results);
+      setCrossResults([...byKey.values()]);
     } else {
       setCrossResults(null);
     }
@@ -285,7 +338,7 @@ export default function App() {
       };
     }
     const col = dataRef.current[curColIdx];
-    if (!col) return { title: '请选择数据库文件', cross: false, convs: [], sections: null };
+    if (!col) return { title: dbRef.current ? '请选择左侧收藏夹' : '请选择数据库文件', cross: false, convs: [], sections: null };   // BUG-13：按加载状态区分文案
     const convs = allConvs(col);
     let filtered = [];
     for (const conv of convs) {
@@ -301,13 +354,14 @@ export default function App() {
     return { title: col.title, cross: false, convs: filtered, sections: null, col };
   }, [dataVersion, curColIdx, crossResults, deferredKw, searchField, filterMastered, filterHasTags]);
 
-  // 分栏视图时按 sec 分组 filtered convs
+  // 分栏视图时按 sec 分组 filtered convs（sentenceId 供分栏头编辑/删除，BUG-03）
   const sectioned = useMemo(() => {
     if (!view.sections) return null;
     const indexOf = new Map(view.convs.map(c => [c.messageId, c]));
     return view.sections.map((sec, si) => ({
       si,
       title: sec.title,
+      sentenceId: sec.sentenceId,
       conversations: sec.conversations.map(c => indexOf.get(c.messageId)).filter(Boolean),
     })).filter(sec => true);
   }, [view]);
@@ -319,7 +373,7 @@ export default function App() {
       view.convs.forEach(r => items.push({ type: 'conv', conv: r.conv, col: r.collection }));
     } else if (sectioned) {
       sectioned.forEach(sec => {
-        items.push({ type: 'section', si: sec.si, title: sec.title, secId: 'sec-' + sec.si, convs: sec.conversations });
+        items.push({ type: 'section', si: sec.si, title: sec.title, secId: 'sec-' + sec.si, sentenceId: sec.sentenceId, convs: sec.conversations });
         sec.conversations.forEach(c => items.push({ type: 'conv', conv: c, secId: 'sec-' + sec.si }));
       });
     } else {
@@ -519,7 +573,7 @@ export default function App() {
         await w.write(data); await w.close();
         setDbDirty(false);
         showSnack('已保存到 ' + handle.name, true);
-        await cacheData(dataRef.current, dbRef.current, dbFileName, false);
+        try { await cacheData(dataRef.current, dbRef.current, dbFileName, false); } catch (e) { console.warn('cache write failed', e); }
         return;
       } catch (e) {
         if (e && e.name === 'AbortError') return;
@@ -532,13 +586,13 @@ export default function App() {
     a.click(); URL.revokeObjectURL(url);
     setDbDirty(false);
     showSnack('数据库已导出，请替换原文件', true);
-    await cacheData(dataRef.current, dbRef.current, dbFileName, false);
+    try { await cacheData(dataRef.current, dbRef.current, dbFileName, false); } catch (e) { console.warn('cache write failed', e); }
   }, [dbFileName, showSnack]);
 
   const openImportDialog = useCallback(async () => {
     if (!dbRef.current) { showSnack('请先加载一个数据库'); return; }
     const input = document.createElement('input');
-    input.type = 'file'; input.accept = '.db';
+    input.type = 'file'; input.accept = DB_ACCEPT;
     input.onchange = async e => {
       const file = e.target.files[0];
       if (!file) return;
@@ -564,25 +618,31 @@ export default function App() {
     let imported = 0, skipped = 0;
     db.run('BEGIN TRANSACTION');
     try {
+      // BUG-07：来源 id 一律参数化绑定，杜绝拼接 SQL
+      const existsStmt = db.prepare('SELECT id FROM CollectionList WHERE id = ?');
+      const copyRows = (srcDb, table, whereSql, params) => {
+        const stmt = srcDb.prepare(`SELECT * FROM ${table}${whereSql ? ' WHERE ' + whereSql : ''}`);
+        if (params && params.length) stmt.bind(params);
+        const cols = stmt.getColumnNames();
+        while (stmt.step()) {
+          const vals = stmt.get();
+          const colList = cols.map(c => `\`${c}\``).join(',');
+          const ph = cols.map(() => '?').join(',');
+          db.run(`INSERT OR IGNORE INTO ${table} (${colList}) VALUES (${ph})`, vals);
+        }
+        stmt.free();
+      };
       for (const colId of ids) {
-        const existing = db.exec(`SELECT id FROM CollectionList WHERE id = '${colId}'`);
-        if (existing.length && existing[0].values.length) { skipped++; continue; }
-        const copyRows = (srcDb, table, where) => {
-          const stmt = srcDb.prepare(`SELECT * FROM ${table}${where ? ' WHERE ' + where : ''}`);
-          const cols = stmt.getColumnNames();
-          while (stmt.step()) {
-            const vals = stmt.get();
-            const colList = cols.map(c => `\`${c}\``).join(',');
-            const ph = cols.map(() => '?').join(',');
-            db.run(`INSERT OR IGNORE INTO ${table} (${colList}) VALUES (${ph})`, vals);
-          }
-          stmt.free();
-        };
-        copyRows(srcDb, 'CollectionList', `id = '${colId}'`);
-        copyRows(srcDb, 'Collection', `collectionListId = '${colId}' AND deleted = 0`);
-        copyRows(srcDb, 'LocalMessage', `id IN (SELECT messageId FROM Collection WHERE collectionListId = '${colId}' AND messageId IS NOT NULL)`);
+        existsStmt.bind([colId]);
+        const exists = existsStmt.step();
+        existsStmt.reset();
+        if (exists) { skipped++; continue; }
+        copyRows(srcDb, 'CollectionList', 'id = ?', [colId]);
+        copyRows(srcDb, 'Collection', 'collectionListId = ? AND deleted = 0', [colId]);
+        copyRows(srcDb, 'LocalMessage', 'id IN (SELECT messageId FROM Collection WHERE collectionListId = ? AND messageId IS NOT NULL)', [colId]);
         imported++;
       }
+      existsStmt.free();
       db.run('COMMIT');
     } catch (e) {
       db.run('ROLLBACK');
@@ -594,20 +654,30 @@ export default function App() {
     setDbDirty(true);
     showSnack(`成功导入 ${imported} 个收藏夹` + (skipped ? `，${skipped} 个已存在跳过` : '') + (imported ? '，记得点击保存' : ''), imported > 0);
     clearTimeout(masteredCacheTimer.current);
-    masteredCacheTimer.current = setTimeout(() => cacheData(data, db, dbFileName, true), 1000);
+    masteredCacheTimer.current = setTimeout(() =>
+      cacheData(data, db, dbFileName, true).catch(e => console.warn('cache write failed', e)), 1000);
   }, [dbFileName, showSnack]);
 
   const syncFromPhone = useCallback(async () => {
-    setDbChip(true, dbChipExtra);
-    try {
-      const buf = await syncFromPhoneApi();
-      await loadFromBuffer(buf, 'OCAT.db');
-      showSnack('已从手机同步最新数据库', true);
-    } catch (e) {
-      if (e.name === 'TypeError' || e.name === 'AbortError') setModal({ type: 'synchelp' });
-      else showSnack('同步失败: ' + e.message);
+    const doSync = async () => {
+      setDbChip(true, dbChipExtra);
+      try {
+        const buf = await syncFromPhoneApi();
+        await loadFromBuffer(buf, 'OCAT.db');
+        showSnack('已从手机同步最新数据库', true);
+      } catch (e) {
+        if (e.name === 'TypeError' || e.name === 'AbortError') setModal({ type: 'synchelp' });
+        else showSnack('同步失败: ' + e.message);
+      }
+    };
+    // BUG-01：同步会用手机数据覆盖当前数据，先确认未保存更改
+    if (dbRef.current && dbDirty) {
+      confirmAction('浏览器内有未保存的更改，同步将覆盖为手机数据并丢失这些更改。是否继续？', doSync,
+        { title: '未保存的更改', confirmLabel: '继续' });
+      return;
     }
-  }, [loadFromBuffer, showSnack, setDbChip, dbChipExtra]);
+    doSync();
+  }, [loadFromBuffer, showSnack, setDbChip, dbChipExtra, dbDirty, confirmAction]);
 
   // ===== 标记已掌握 =====
   const toggleMastered = useCallback((sid) => {
@@ -629,19 +699,19 @@ export default function App() {
     setDbDirty(true);
     showSnack(newVal ? '已标记为已掌握，记得保存' : '已取消掌握', true);
     clearTimeout(masteredCacheTimer.current);
-    masteredCacheTimer.current = setTimeout(() => cacheData(dataRef.current, dbRef.current, dbFileName, true), 3000);
+    masteredCacheTimer.current = setTimeout(() =>
+      cacheData(dataRef.current, dbRef.current, dbFileName, true).catch(e => console.warn('cache write failed', e)), 3000);
   }, [dbFileName, showSnack]);
 
   // ===== 写功能：编辑 / 删除 / 添加 / 新建收藏夹 =====
-  const confirmActionRef = useRef(null);
-
   const afterWrite = useCallback((msg) => {
     dataRef.current = loadAllData(dbRef.current);
     bumpData();
     setDbDirty(true);
     showSnack(msg, true);
     clearTimeout(masteredCacheTimer.current);
-    masteredCacheTimer.current = setTimeout(() => cacheData(dataRef.current, dbRef.current, dbFileName, true), 2000);
+    masteredCacheTimer.current = setTimeout(() =>
+      cacheData(dataRef.current, dbRef.current, dbFileName, true).catch(e => console.warn('cache write failed', e)), 2000);
   }, [dbFileName, showSnack]);
 
   // 统一字段：注音（完整句子 + 漢字[かんじ]）存在时，正文以其去括号结果为准，保证显示/搜索/导出一致
@@ -685,9 +755,8 @@ export default function App() {
   }, [curColIdx, afterWrite, normalizeFields]);
 
   const confirmDelete = useCallback((message, action) => {
-    confirmActionRef.current = action;
-    setModal({ type: 'confirm', message });
-  }, []);
+    confirmAction(message, action, { title: '确认删除' });
+  }, [confirmAction]);
 
   const deleteSentence = useCallback((sid) => {
     if (!dbRef.current) return;
@@ -734,6 +803,20 @@ export default function App() {
   const openEditModal = useCallback((s) => {
     setModal({ type: 'edit', sid: s.id, base: { content: s.content || '', translation: s.translation || '', tags: s.tags || '', ruby: s.ruby || '' } });
   }, []);
+
+  // BUG-03：分栏标题的编辑/删除（复用句子编辑弹窗与软删除）
+  const editSection = useCallback((sec) => {
+    if (!sec.sentenceId) return;
+    openEditModal({ id: sec.sentenceId, content: sec.title || '', translation: '', tags: '', ruby: '' });
+  }, [openEditModal]);
+
+  const deleteSection = useCallback((sec) => {
+    if (!sec.sentenceId || !dbRef.current) return;
+    confirmDelete('确定删除该分栏吗？（💾 保存后才会从文件移除）', () => {
+      deleteSentenceDb(dbRef.current, sec.sentenceId);
+      afterWrite('已删除分栏（💾 保存后写入文件）');
+    });
+  }, [confirmDelete, afterWrite]);
 
   const openAddModal = useCallback(() => {
     if (!dataRef.current[curColIdx]) { showSnack('请先选择收藏夹'); return; }
@@ -813,6 +896,7 @@ export default function App() {
         if (si && !si.disabled) { e.preventDefault(); si.focus(); }
       } else if (e.code === 'Space') {
         e.preventDefault(); speech.toggle(); setPlaying(speech.state.playing);
+        setPaused(window.speechSynthesis ? window.speechSynthesis.paused : false);   // BUG-11：空格操作后同步暂停态
       } else if (e.key === 'ArrowLeft') {
         e.preventDefault(); speech.prev(); setPlaying(true);
       } else if (e.key === 'ArrowRight') {
@@ -890,7 +974,7 @@ export default function App() {
       <div className="top-bar">
         <h1 style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
             onClick={() => { convListRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); navRailRef.current?.scrollTo({ top: 0, behavior: 'smooth' }); }} title="点击回到顶部">
-          <img src="https://writer.drakeet.com/images/orca_dark.png" width="28" height="28" style={{ borderRadius: 4 }} alt="OCAT" />
+          <img src={orcaLogo} width="28" height="28" style={{ borderRadius: 4 }} alt="OCAT" />
           OCAT++
         </h1>
         <button className="md-btn md-btn-icon" onClick={() => setTheme(t => t === '' ? 'dark' : t === 'dark' ? 'light' : '')} title={theme === 'dark' ? '深色模式（点击切换）' : theme === 'light' ? '浅色模式（点击恢复跟随系统）' : '跟随系统（点击切换）'}>
@@ -902,21 +986,38 @@ export default function App() {
         </button>
         <button className="md-btn md-btn-icon" data-pal-btn="1"
                 title="随机配色（点击换色，双击恢复默认）"
-                onClick={(e) => { const h = randomHue(); setHueState(h); showSnack(`配色 #${h}`, true); }}
-                onDoubleClick={() => { setHueState(null); showSnack('已恢复默认配色', true); }}>
+                onClick={() => {
+                  // UI-14：延时区分单击/双击，双击恢复默认时不再先触发一次换色
+                  clearTimeout(palClickTimer.current);
+                  palClickTimer.current = setTimeout(() => {
+                    const h = randomHue(); setHueState(h); showSnack(`配色 #${h}`, true);
+                  }, 250);
+                }}
+                onDoubleClick={() => { clearTimeout(palClickTimer.current); setHueState(null); showSnack('已恢复默认配色', true); }}>
           <span className="mi">palette</span>
         </button>
         <select className="md-select" id="zoomSelect" value={String(zoom)} title="界面缩放（大屏幕可调大）"
-                onChange={e => setZoomState(parseFloat(e.target.value) || 1)} style={{ height: 36 }}>
+                onChange={e => setZoomState(parseFloat(e.target.value) || 1)}>
           {['1', '1.1', '1.25', '1.5', '1.75'].map(z => <option key={z} value={z}>{Math.round(z * 100)}%</option>)}
         </select>
-        <span className={'db-chip' + (dbReady ? ' loaded' : '')} title={dbReady && dbDirty ? '浏览器内的数据包含尚未写回磁盘文件的更改，请点击右上角保存按钮' : ''}>{chipText}</span>
-        <button className="md-btn md-btn-filled" onClick={openDatabase}><span className="mi">folder_open</span>选择数据库</button>
-        <button className="md-btn md-btn-tonal" onClick={syncFromPhone} title="通过 ADB 从手机同步最新数据库"><span className="mi">sync</span>同步手机</button>
-        <span className="stats">{colCount ? `${colCount} 收藏夹 · ${totalConvs} 对话 · ${totalSens} 句` : ''}</span>
+        <span className={'db-chip' + (dbReady ? ' loaded' : '') + (dbDirty ? ' dirty' : '')} title={dbReady && dbDirty ? '浏览器内的数据包含尚未写回磁盘文件的更改，请点击右上角保存按钮' : ''}>{chipText}</span>
+        <button className="md-btn md-btn-filled topbar-action" onClick={openDatabase}><span className="mi">folder_open</span>选择数据库</button>
+        <button className="md-btn md-btn-tonal topbar-action" onClick={syncFromPhone} title="通过 ADB 从手机同步最新数据库"><span className="mi">sync</span>同步手机</button>
+        <span className="stats topbar-stats">{colCount ? `${colCount} 收藏夹 · ${totalConvs} 对话 · ${totalSens} 句` : ''}</span>
         <button className="md-btn md-btn-icon md-btn-outlined" onClick={openImportDialog} title="从其他数据库导入收藏夹"><span className="mi">move_to_inbox</span></button>
         <button className="md-btn md-btn-icon md-btn-outlined" onClick={saveDatabase} title="保存数据库到文件"><span className="mi">save</span></button>
         <button className="md-btn md-btn-icon md-btn-outlined" onClick={clearCache} title="清除缓存重新解析"><span className="mi">refresh</span></button>
+        {/* UI-02：窄屏溢出菜单入口（桌面隐藏，≤720px 显示） */}
+        <button className="md-btn md-btn-icon md-btn-outlined topbar-more" title="更多操作"
+                onClick={() => setMoreOpen(v => !v)}>
+          <span className="mi">more_vert</span>
+        </button>
+        {moreOpen && (
+          <div className="topbar-menu" onClick={() => setMoreOpen(false)}>
+            <button className="topbar-menu-item" onClick={openDatabase}><span className="mi">folder_open</span>选择数据库</button>
+            <button className="topbar-menu-item" onClick={syncFromPhone}><span className="mi">sync</span>同步手机</button>
+          </div>
+        )}
       </div>
 
       {/* 搜索栏 */}
@@ -1031,6 +1132,12 @@ export default function App() {
                   <div className="title">欢迎使用 OCAT++</div>
                   <div className="desc">点击上方「选择数据库」加载 SQLite DB 文件</div>
                 </div>
+              ) : curColIdx < 0 && !view.cross ? (
+                <div className="empty-state">
+                  <div className="icon mi">folder_open</div>
+                  <div className="title">从左侧选择一个收藏夹</div>
+                  <div className="desc">选择后即可浏览、搜索与播放</div>
+                </div>
               ) : flatItems.length === 0 ? (
                 <div className="empty-state">
                   <div className="icon mi">search</div>
@@ -1046,6 +1153,19 @@ export default function App() {
                       <span className="mi" style={{ fontSize: 16, color: 'var(--md-sys-color-primary)' }}>folder</span>
                       {escHtml(b.section.title || '(未分类)')}
                       <span className="section-count">{b.section.convs.length} 对话 · {b.section.convs.reduce((t, c) => t + c.sentences.length, 0)} 句</span>
+                      {/* BUG-03：分栏编辑/删除入口 */}
+                      <span className="section-actions">
+                        <button type="button" className="md-btn md-btn-text md-btn-sm" title="编辑分栏标题"
+                                disabled={!b.section.sentenceId}
+                                onClick={e => { e.stopPropagation(); editSection(b.section); }}>
+                          <span className="mi">edit_note</span>
+                        </button>
+                        <button type="button" className="md-btn md-btn-text md-btn-sm" title="删除分栏"
+                                disabled={!b.section.sentenceId}
+                                onClick={e => { e.stopPropagation(); deleteSection(b.section); }}>
+                          <span className="mi">delete_outline</span>
+                        </button>
+                      </span>
                     </div>
                     <div className="section-group-body">
                       {b.convs.map(it => <ConvCard key={it.conv.messageId} conv={it.conv} state={makeState()} />)}
@@ -1093,7 +1213,7 @@ export default function App() {
               </button>
               <button className="md-btn" onClick={() => { speech.next(); setPlaying(true); }} title="下一句"><span className="mi">skip_next</span></button>
               <button className="md-btn" onClick={() => { speech.stop(); setPlaying(false); setPlayingIdx(-1); }} title="停止"><span className="mi">stop</span></button>
-              <button className="md-btn" onClick={() => { speech.setMode(speech.state.mode === 'loop' ? 'shuffle' : 'loop'); setVoicesVersion(v => v + 1); }}
+              <button className={'md-btn pb-mode' + (speech.state.mode === 'shuffle' ? ' active' : '')} onClick={() => { speech.setMode(speech.state.mode === 'loop' ? 'shuffle' : 'loop'); setVoicesVersion(v => v + 1); }}
                       title={speech.state.mode === 'loop' ? '列表循环' : '随机播放（跨页、不重复）'}>
                 <span className="mi">{speech.state.mode === 'loop' ? 'repeat' : 'shuffle'}</span>
               </button>
@@ -1120,7 +1240,7 @@ export default function App() {
         <div className={'modal-scrim' + (modalClosing ? ' closing' : '')} onMouseDown={e => { if (e.target === e.currentTarget) closeModal(); }}>
           <div className="modal-dialog">
             <div className="modal-header">
-              <h3>{MODAL_TITLES[modal.type] || '详情'}</h3>
+              <h3>{modal.title || MODAL_TITLES[modal.type] || '详情'}</h3>
               <button className="modal-close" onClick={closeModal} title="关闭 (Esc)"><span className="mi">close</span></button>
             </div>
             <div className="modal-body" id="modalBody">
@@ -1131,7 +1251,7 @@ export default function App() {
               {modal.type === 'edit' && <SentenceEditModal base={modal.base} onSave={(fields) => { saveSentenceEdit(modal.sid, fields); closeModal(); }} onCancel={closeModal} />}
               {modal.type === 'add' && <SentenceEditModal add onSave={(fields) => { addSentence(fields.type, fields); closeModal(); }} onCancel={closeModal} />}
               {modal.type === 'newcol' && <NewCollectionModal onSave={(title, lang) => { createCollection(title, lang); closeModal(); }} onCancel={closeModal} />}
-              {modal.type === 'confirm' && <ConfirmModal message={modal.message} onConfirm={() => { const a = confirmActionRef.current; confirmActionRef.current = null; closeModal(); a && a(); }} onCancel={() => { confirmActionRef.current = null; closeModal(); }} />}
+              {modal.type === 'confirm' && <ConfirmModal message={modal.message} confirmLabel={modal.confirmLabel} onConfirm={() => { const a = confirmActionRef.current; confirmActionRef.current = null; closeModal(); a && a(); }} onCancel={() => { confirmActionRef.current = null; closeModal(); }} />}
             </div>
           </div>
         </div>

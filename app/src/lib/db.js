@@ -67,7 +67,8 @@ export function loadAllData(db) {
         }
       }
       if (sections.length) {
-        sections.forEach(sec => allItems.push({ idx: sec.index, isSection: true, title: sec.content, conv: { messageId: msgid, userQuestion: '', aiAnswer: '', aiSummary: '', model: '', sentences: [] } }));
+        // secId 随分栏透传（UI 分栏头的编辑/删除入口需要定位底层句子记录）
+        sections.forEach(sec => allItems.push({ idx: sec.index, isSection: true, title: sec.content, secId: sec.id, conv: { messageId: msgid, userQuestion: '', aiAnswer: '', aiSummary: '', model: '', sentences: [] } }));
       } else if (normals.length) {
         allItems.push({ idx: normals[0].index, isSection: false, title: '', conv: { messageId: msgid, userQuestion: userQ, aiAnswer: aiA, aiSummary: aiA.substring(0, 250), model, sentences: normals } });
       }
@@ -78,7 +79,7 @@ export function loadAllData(db) {
     if (hasSections) {
       const sections = []; let cur = null;
       allItems.forEach(it => {
-        if (it.isSection) { cur = { title: it.title, conversations: [] }; sections.push(cur); }
+        if (it.isSection) { cur = { title: it.title, sentenceId: it.secId, conversations: [] }; sections.push(cur); }
         else if (cur) cur.conversations.push(it.conv);
         else { if (!sections.length) sections.push({ title: '', conversations: [] }); sections[0].conversations.push(it.conv); }
       });
@@ -117,10 +118,13 @@ export async function cacheData(DATA, db, name, dirty) {
   let raw = null;
   try { raw = db ? db.export() : null; } catch (e) { raw = null; }
   const idb = await openCache();
-  await new Promise((resolve) => {
+  await new Promise((resolve, reject) => {
     const tx = idb.transaction('data', 'readwrite');
     tx.objectStore('data').put({ data: DATA, raw, name, time: Date.now(), dirty: !!dirty }, 'current');
     tx.oncomplete = () => { idb.close(); resolve(); };
+    // 配额超限/隐私模式等写入失败必须向上抛出，否则调用方 await 永挂（BUG-04）
+    tx.onerror = () => { idb.close(); reject(tx.error || new Error('IndexedDB write failed')); };
+    tx.onabort = () => { idb.close(); reject(tx.error || new Error('IndexedDB transaction aborted')); };
   });
 }
 

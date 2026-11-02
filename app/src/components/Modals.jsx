@@ -1,11 +1,21 @@
 // 各类模态框内容（纯展示，确认/取消/复制等动作由 props 注入）
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { escHtml, stripMarkdown, preprocessLangBlocks } from '../lib/text.js';
 import { dictLinks, dictLinksEn } from '../lib/lookup.js';
 import { syncCmd } from '../lib/view.js';
 
+// AI 回复来自数据库且支持导入外部 db 文件，marked 默认不消毒，
+// 必须 sanitize 后再注入（BUG-05：防止导入库携带脚本在页面执行）
+function renderMarkdown(aiText) {
+  return DOMPurify.sanitize(marked.parse(preprocessLangBlocks(aiText || '')));
+}
+
+const LANG_LABEL = { ja: '日语', en: '英语', zh: '中文' };
+const langLabel = (code) => LANG_LABEL[code] || code || '';
+
 export function ConvModal({ conv, onCopy }) {
-  const mdHtml = marked.parse(preprocessLangBlocks(conv.aiAnswer));
+  const mdHtml = renderMarkdown(conv.aiAnswer);
   return (
     <>
       <div className="user-q">
@@ -55,7 +65,7 @@ export function ImportModal({ modal, onConfirm, onClose }) {
       {modal.rows.map((r) => (
         <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', cursor: 'pointer' }}>
           <input type="checkbox" className="md-checkbox" defaultChecked data-id={r.id} />
-          <span>{r.title} <span style={{ color: 'var(--md-sys-color-on-surface-variant)', fontSize: 12 }}>{r.lang || ''} {r.translationLang ? '→ ' + r.translationLang : ''}</span></span>
+          <span>{r.title} <span style={{ color: 'var(--md-sys-color-on-surface-variant)', fontSize: 12 }}>{langLabel(r.lang)} {r.translationLang ? '→ ' + langLabel(r.translationLang) : ''}</span></span>
         </label>
       ))}
       <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
@@ -79,14 +89,14 @@ export function SyncHelpModal({ onCopy, onClose }) {
   );
 }
 
-export function ConfirmModal({ message, onConfirm, onCancel }) {
+export function ConfirmModal({ message, onConfirm, onCancel, confirmLabel = '删除' }) {
   return (
     <div style={{ textAlign: 'center', padding: 8 }}>
       <div style={{ fontSize: 40, marginBottom: 12, color: 'var(--md-sys-color-error)' }}><span className="mi" style={{ fontSize: 40 }}>warning</span></div>
       <div style={{ font: 'var(--md-sys-typescale-body-medium)', marginBottom: 20, whiteSpace: 'pre-wrap' }}>{message}</div>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
         <button className="md-btn md-btn-text" onClick={onCancel}>取消</button>
-        <button className="md-btn md-btn-filled" style={{ background: 'var(--md-sys-color-error)' }} onClick={onConfirm}>删除</button>
+        <button className="md-btn md-btn-filled" style={{ background: 'var(--md-sys-color-error)' }} onClick={onConfirm}>{confirmLabel}</button>
       </div>
     </div>
   );
