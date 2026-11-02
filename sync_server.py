@@ -13,14 +13,44 @@ import tarfile
 import io
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-ADB = r"C:\Program Files\Escrcpy\resources\extra\win\scrcpy\adb.exe"
+# BUG-12：ADB 路径不再硬编码。探测顺序：环境变量 OCAT_ADB -> PATH -> 常见安装位置
+ADB_CANDIDATES = [
+    r"C:\Program Files\Escrcpy\resources\extra\win\scrcpy\adb.exe",
+    r"C:\Program Files (x86)\Escrcpy\resources\extra\win\scrcpy\adb.exe",
+    r"C:\adb\platform-tools\adb.exe",
+]
 PHONE_DB = "/data/user/0/com.drakeet.deepocat/databases/SQLite/6a705d26492a195c81b6d4fb.db"
 LOCAL_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "OCAT.db")
 PORT = 8899
+ADB = None
+
+
+def find_adb():
+    """定位可用的 adb 可执行文件，返回路径或 None"""
+    candidates = []
+    env = os.environ.get("OCAT_ADB")
+    if env:
+        candidates.append(env)
+    candidates.append("adb")  # PATH
+    candidates.extend(ADB_CANDIDATES)
+    for c in candidates:
+        try:
+            r = subprocess.run([c, "version"], capture_output=True, timeout=5)
+            if r.returncode == 0:
+                return c
+        except Exception:
+            continue
+    return None
 
 
 class SyncHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        # BUG-06：仅服务 file:// 页面（其跨域请求 Origin 为 "null"）与无 Origin 的本地工具调用；
+        # 带具体来源的网页一律拒绝，防止任意网站读取数据库内容或触发 ADB 操作
+        origin = self.headers.get("Origin")
+        if origin is not None and origin != "null":
+            self._send_error("Origin not allowed: %s" % origin)
+            return
         if self.path == "/api/sync":
             self._handle_sync()
         elif self.path == "/api/ping":
@@ -101,7 +131,7 @@ class SyncHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # BUG-06：不再返回 Access-Control-Allow-Origin，配合 do_GET 的 Origin 校验
         self.end_headers()
         self.wfile.write(data)
 
@@ -133,7 +163,6 @@ class SyncHandler(BaseHTTPRequestHandler):
         body = json.dumps(data).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -143,7 +172,6 @@ class SyncHandler(BaseHTTPRequestHandler):
         body = json.dumps({"error": msg}).encode()
         self.send_response(500)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -154,9 +182,13 @@ class SyncHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    if not os.path.exists(ADB):
-        print(f"错误: ADB 未找到: {ADB}")
+    global ADB
+    ADB = find_adb()
+    if not ADB:
+        print("错误: 未找到 adb。")
+        print("请安装 Android platform-tools，或设置环境变量 OCAT_ADB 指向 adb.exe 后重试。")
         sys.exit(1)
+    print(f"  使用 adb: {ADB}")
 
     server = HTTPServer(("127.0.0.1", PORT), SyncHandler)
     print(f"\n  📱 OCAT 同步服务已启动")
