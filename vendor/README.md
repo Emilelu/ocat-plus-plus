@@ -9,5 +9,6 @@
 | marked.min.js | https://cdn.jsdelivr.net/npm/marked/ | MIT |
 | tiny-segmenter.js | https://cdn.jsdelivr.net/npm/tiny-segmenter@0.2.0/dist/tiny-segmenter-0.2.0.js | MIT |
 | kuromoji.min.js | https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.min.js | Apache-2.0 |
+| material-icons.woff2 | https://fonts.gstatic.com/s/materialicons/ (v145) | Apache-2.0 |
 
 > 注意：kuromoji 的词典 `dicPath` 仍指向 jsDelivr（见 index.html 启动代码）。
