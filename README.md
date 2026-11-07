@@ -6,9 +6,12 @@ React 工程化（Vite 构建，打包为单个 HTML），基于 SQL.js 在浏�
 
 ## 快速开始
 
-1. 双击根目录 `index.html` 打开页面（已构建好的单文件，全部依赖已内联）
-2. 点击「选择数据库」加载 SQLite DB 文件
-3. 开始浏览、搜索、导出
+**在线使用（推荐）**：直接打开 <https://emilelu.github.io/ocat.html>
+
+**本地使用**：从 [Releases](https://github.com/Emilelu/ocat-plus-plus/releases/latest) 下载 `ocat-plus-plus-*.html`（或使用仓库根目录已构建好的 `index.html`），双击打开——单文件已内联全部依赖。
+
+1. 点击「选择数据库」加载 SQLite DB 文件
+2. 开始浏览、搜索、导出
 
 > 首次加载后数据会自动缓存到浏览器，下次打开秒开。
 
@@ -66,7 +69,7 @@ cmd /c "cd /d <项目目录> && python sync_server.py"
 | 界面缩放 | 100%~175% 缩放控制，4K 大屏自动放大 |
 | 随机配色 | 点击调色板按钮随机生成 Material You 风格强调色，双击恢复默认 |
 | 深浅色模式 | 跟随系统自动切换，也可手动切换 |
-| 离线可用 | 核心库与图标字体已本地化（vendor/），无网络也能启动 |
+| 离线可用 | 单文件内联全部 JS/CSS/字体/wasm，双击即用，无网络也能启动 |
 | 数据缓存 | 浏览器 IndexedDB 缓存（含原始数据库），刷新秒开且支持编辑 |
 
 ## 技术栈
@@ -140,7 +143,7 @@ A: 浏览器无法直接写回磁盘文件。导入后点击 💾 保存——Ch
 
 **Q: 不联网能用吗？**
 
-A: 能。核心库（sql.js / marked / 分词器）已本地化在 `vendor/` 目录，只有查词的 Kuromoji 词典在离线时会自动降级为轻量分词。
+A: 能。`index.html` 已内联全部 JS/CSS/字体/wasm，除查词的 Kuromoji 词典（走 CDN）外完全离线；词典加载失败时查词自动降级为本地轻量分词（TinySegmenter）。`vendor/` 目录为历史留档，当前构建不再使用。
 
 **Q: 怎么把多个数据库合并？**
 
